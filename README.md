@@ -40,6 +40,38 @@ The UI talks to the analysis through a single async boundary,
 deterministic engine for a real model (e.g. the Claude API) means changing only
 that function — the `AnalysisResult` contract and the entire UI stay the same.
 
+## Sample dataset (for CSV-upload development)
+
+A larger synthetic dataset lives at [`public/sample-reviews.csv`](public/sample-reviews.csv)
+(204 reviews across 6 products and 5 categories). It exists to test the next
+version of ReviewIQ — including planned CSV-upload support — with far more
+variety than the small built-in sample.
+
+Columns:
+
+| Column | Description |
+| --- | --- |
+| `review_id` | Unique ID, e.g. `hp-0001` |
+| `product_id` | Stable product key, e.g. `headphones-01` |
+| `product_name` | Display name |
+| `category` | Electronics, Kitchen Appliances, Wearables, Home Office, Personal Care |
+| `review_date` | ISO date, `YYYY-MM-DD` |
+| `rating` | Integer 1–5 |
+| `review_title` | Short title |
+| `review_text` | Review body |
+| `verified_purchase` | `true` or `false` |
+| `country` | Short code (US, UK, CA, AU, NZ, IE) |
+
+It is deliberately designed to exercise product/date filtering, recurring
+themes, evidence-backed findings, representative quotes, uneven review volume,
+and small vs. large result sets. It also embeds intentional patterns — a
+product whose sentiment improves over time, one that worsens, and a temporary
+complaint spike in a specific date range.
+
+> **This is synthetic sample data, not real customer reviews.** It is intended
+> only for product testing and CSV-upload development, and must not be presented
+> as, or mistaken for, genuine customer data.
+
 ## Tech
 
 React · TypeScript · Vite · Tailwind CSS · Vitest
