@@ -1,5 +1,6 @@
 import type { FormEvent } from "react";
-import type { Product } from "../types";
+import type { Product, ReviewStats } from "../types";
+import { formatDate } from "../lib/date";
 import { ProductSelect } from "./ProductSelect";
 import { DateRangePicker } from "./DateRangePicker";
 
@@ -8,6 +9,8 @@ interface AnalyzeFormProps {
   productId: string;
   from: string;
   to: string;
+  /** Sample-data context for the selected product, to guide range selection. */
+  sampleStats: ReviewStats;
   onProductChange: (productId: string) => void;
   onFromChange: (date: string) => void;
   onToChange: (date: string) => void;
@@ -21,6 +24,7 @@ export function AnalyzeForm({
   productId,
   from,
   to,
+  sampleStats,
   onProductChange,
   onFromChange,
   onToChange,
@@ -41,12 +45,21 @@ export function AnalyzeForm({
         Query
       </p>
       <div className="flex flex-col gap-5">
-        <ProductSelect
-          products={products}
-          value={productId}
-          onChange={onProductChange}
-          disabled={isLoading}
-        />
+        <div className="flex flex-col gap-1.5">
+          <ProductSelect
+            products={products}
+            value={productId}
+            onChange={onProductChange}
+            disabled={isLoading}
+          />
+          {sampleStats.count > 0 ? (
+            <p className="font-mono text-[11px] text-ink-soft">
+              Sample data · {sampleStats.count} reviews · {formatDate(sampleStats.from)} –{" "}
+              {formatDate(sampleStats.to)}
+            </p>
+          ) : null}
+        </div>
+
         <DateRangePicker
           from={from}
           to={to}
@@ -55,6 +68,7 @@ export function AnalyzeForm({
           disabled={isLoading}
           error={rangeError}
         />
+
         <button
           type="submit"
           disabled={!canSubmit}
@@ -72,6 +86,10 @@ export function AnalyzeForm({
             <>Run analysis →</>
           )}
         </button>
+
+        <p className="font-mono text-[11px] leading-relaxed text-ink-soft">
+          Prototype: Uses sample product reviews and deterministic analysis.
+        </p>
       </div>
     </form>
   );

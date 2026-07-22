@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { products } from "./data/products";
+import { reviews } from "./data/reviews";
+import { reviewStatsFor } from "./services/analysisEngine";
 import { useAnalysis } from "./hooks/useAnalysis";
 import { AnalyzeForm } from "./components/AnalyzeForm";
 import { ResultsView } from "./components/ResultsView";
@@ -14,6 +16,8 @@ export default function App() {
   const [from, setFrom] = useState(DEFAULT_FROM);
   const [to, setTo] = useState(DEFAULT_TO);
   const { state, analyze } = useAnalysis();
+
+  const sampleStats = reviewStatsFor(productId, reviews);
 
   return (
     <div className="min-h-screen">
@@ -45,6 +49,7 @@ export default function App() {
             productId={productId}
             from={from}
             to={to}
+            sampleStats={sampleStats}
             onProductChange={setProductId}
             onFromChange={setFrom}
             onToChange={setTo}
@@ -52,7 +57,8 @@ export default function App() {
             isLoading={state.status === "loading"}
           />
 
-          <div>
+          {/* Single polite live region announcing analysis status and results. */}
+          <div aria-live="polite" aria-atomic="false">
             {state.status === "idle" ? (
               <StateMessage
                 tone="idle"

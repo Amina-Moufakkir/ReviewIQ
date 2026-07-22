@@ -14,7 +14,6 @@ export function StateMessage({ tone, title, description }: StateMessageProps) {
         isError ? "border-fault/40 bg-fault-soft" : "border-dashed border-rule bg-card/50"
       }`}
       role={isError ? "alert" : "status"}
-      aria-live="polite"
     >
       {tone === "loading" ? (
         <div className="mb-4 h-0.5 w-full overflow-hidden bg-rule" aria-hidden="true">

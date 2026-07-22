@@ -1,11 +1,15 @@
+import type { Finding } from "../types";
+
 interface SentimentColumnProps {
   tone: "praise" | "fault";
   title: string;
-  items: string[];
+  findings: Finding[];
+  /** Total matched reviews, for the "X of N reviews" evidence line. */
+  reviewCount: number;
 }
 
-/** One side of the balance-of-opinion ledger: praise or faults. */
-export function SentimentColumn({ tone, title, items }: SentimentColumnProps) {
+/** One side of the balance-of-opinion ledger: evidence-backed findings. */
+export function SentimentColumn({ tone, title, findings, reviewCount }: SentimentColumnProps) {
   const isPraise = tone === "praise";
   const accent = isPraise ? "text-praise" : "text-fault";
   const topBorder = isPraise ? "border-t-praise" : "border-t-fault";
@@ -17,19 +21,38 @@ export function SentimentColumn({ tone, title, items }: SentimentColumnProps) {
           {title}
         </span>
         <span className="font-mono text-xs text-ink-soft" aria-hidden="true">
-          {items.length}
+          {findings.length}
         </span>
       </h3>
-      <ul className="flex flex-col gap-3">
-        {items.map((item, i) => (
-          <li key={i} className="flex gap-3 text-sm leading-relaxed text-ink">
-            <span className={`font-mono ${accent}`} aria-hidden="true">
-              {isPraise ? "+" : "–"}
-            </span>
-            <span>{item}</span>
-          </li>
-        ))}
-      </ul>
+
+      {findings.length === 0 ? (
+        <p className="text-sm text-ink-soft">
+          No {isPraise ? "positive" : "negative"} themes surface in this window.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-5">
+          {findings.map((f) => (
+            <li key={f.label} className="flex flex-col gap-1.5">
+              <div className="flex items-baseline gap-2">
+                <span className={`font-mono ${accent}`} aria-hidden="true">
+                  {isPraise ? "+" : "–"}
+                </span>
+                <span className="text-sm font-medium text-ink">{f.label}</span>
+              </div>
+              <p className="font-mono text-[11px] text-ink-soft">
+                Mentioned in {f.mentions} of {reviewCount} review{reviewCount === 1 ? "" : "s"} ·{" "}
+                {f.percent}%
+              </p>
+              <blockquote className="border-l border-rule pl-3">
+                <p className="text-sm italic leading-relaxed text-ink">“{f.quote}”</p>
+                <cite className="mt-1 block font-mono text-[11px] not-italic text-ink-soft">
+                  — {f.quoteAuthor}
+                </cite>
+              </blockquote>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

@@ -35,7 +35,5 @@ export function useAnalysis() {
     }
   }, []);
 
-  const reset = useCallback(() => setState({ status: "idle" }), []);
-
-  return { state, analyze, reset };
+  return { state, analyze };
 }
