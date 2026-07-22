@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+/* Design system — "Customer sentiment brief".
+   Ink on newsprint paper; chromatic color is reserved for sentiment only. */
+@theme {
+  --font-display: "Newsreader", ui-serif, Georgia, serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-paper: #e6e3dc;
+  --color-card: #f4f2ec;
+  --color-ink: #201d1a;
+  --color-ink-soft: #6c6659;
+  --color-rule: #d2cabb;
+
+  --color-praise: #2f6b4f;
+  --color-praise-soft: #e4ede6;
+  --color-fault: #a23b2d;
+  --color-fault-soft: #f1e3df;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--color-ink);
+    color: var(--color-paper);
+  }
+}
+
+/* Single orchestrated moment: findings slide in when a run completes. */
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-reveal {
+  animation: reveal 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+/* Loading scan bar. */
+@keyframes scan {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+.animate-scan {
+  animation: scan 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-reveal,
+  .animate-scan {
+    animation: none;
+  }
+}
