@@ -1,5 +1,7 @@
 # ReviewIQ
 
+**Live demo → https://amina-moufakkir.github.io/ReviewIQ/**
+
 ReviewIQ helps E-commerce Analysts quickly understand customer feedback by turning hundreds of product reviews into concise AI-generated summaries.
 
 ## Problem
