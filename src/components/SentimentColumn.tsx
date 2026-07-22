@@ -27,7 +27,7 @@ export function SentimentColumn({ tone, title, findings, reviewCount }: Sentimen
 
       {findings.length === 0 ? (
         <p className="text-sm text-ink-soft">
-          No {isPraise ? "positive" : "negative"} themes surface in this window.
+          No {isPraise ? "positive" : "negative"} themes have enough evidence in this window.
         </p>
       ) : (
         <ul className="flex flex-col gap-5">

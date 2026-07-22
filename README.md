@@ -12,6 +12,7 @@ Customer insights are buried in thousands of reviews. Analysts spend hours readi
 
 The core MVP is complete. An analyst can:
 
+- Use the built-in sample, **upload a CSV**, or load the bundled 204-review sample
 - Select a product
 - Select a date range
 - Run the analysis
@@ -22,30 +23,47 @@ Every insight — findings, mention counts, percentages, representative quotes,
 and the summary — is derived only from the reviews inside the selected product
 and date range.
 
+## CSV upload
+
+Upload a CSV of reviews and ReviewIQ analyzes it in place — no backend. Required
+columns: `review_id`, `product_id`, `product_name`, `category`, `review_date`
+(`YYYY-MM-DD`), `rating` (1–5), `review_text`. Optional: `review_title`,
+`verified_purchase`, `country`. See [`public/sample-reviews.csv`](public/sample-reviews.csv)
+for the exact format. Invalid rows (bad date/rating, duplicate id) are skipped and
+counted; the date range auto-fits the uploaded data. Everything is parsed in the
+browser — no reviews are uploaded to a server.
+
 ## How the analysis works
 
-- The app ships with **sample review data** (`src/data/`) — no backend, database,
-  or accounts.
-- The current analysis is **deterministic, not a live AI model**. A pure engine
-  (`src/services/analysisEngine.ts`) filters reviews by product and date, then
-  aggregates evidence into findings. The same input always produces the same
-  output, which keeps it easy to test.
-- Summaries are generated from the review data by this deterministic engine —
-  they are **not** AI-generated.
+- No backend, database, or accounts. Data comes from the built-in sample or a CSV
+  you provide, and is parsed entirely in the browser.
+- The current analysis is a **deterministic, heuristic, rating-assisted engine —
+  not a natural-language sentiment model and not a live AI model.** A pure engine
+  (`src/services/analysisEngine.ts`) filters reviews by product and date, then:
+  - **detects themes** by deterministic keyword matching against a shared,
+    product-agnostic vocabulary (`src/services/themeLibrary.ts`);
+  - **decides sentiment from the star rating** — a mention in a review rated ≥ 4
+    is praise, ≤ 2 is a fault, and 3 is neutral;
+  - only surfaces a theme once at least a **minimum number of same-polarity
+    reviews** support it, and always attaches a real supporting quote — sentiment
+    is never asserted from the rating alone.
+- The same input always produces the same output, which keeps it easy to test.
+- Summaries are generated from the review data by this engine — they are
+  **not** AI-generated.
 
 ### Prepared for a future model
 
 The UI talks to the analysis through a single async boundary,
-`analyzeReviews()` in `src/services/analyzeReviews.ts`. Swapping the
-deterministic engine for a real model (e.g. the Claude API) means changing only
+`analyzeReviews()` in `src/services/analyzeReviews.ts`. Swapping the heuristic
+engine for a real classifier or model (e.g. the Claude API) means changing only
 that function — the `AnalysisResult` contract and the entire UI stay the same.
 
 ## Sample dataset (for CSV-upload development)
 
 A larger synthetic dataset lives at [`public/sample-reviews.csv`](public/sample-reviews.csv)
-(204 reviews across 6 products and 5 categories). It exists to test the next
-version of ReviewIQ — including planned CSV-upload support — with far more
-variety than the small built-in sample.
+(204 reviews across 6 products and 5 categories). Load it in the app with
+**"Load 204-review sample"**, or upload your own CSV in the same format. It offers
+far more variety than the small built-in sample.
 
 Columns:
 
@@ -88,4 +106,5 @@ npm run build      # production build
 
 ## Status
 
-✅ Core MVP complete — deterministic analysis over sample data.
+✅ Core MVP complete — CSV upload + deterministic, heuristic analysis over
+sample or uploaded data.

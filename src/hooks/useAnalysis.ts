@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { AnalysisInput, AnalysisResult } from "../types";
+import type { AnalysisInput, AnalysisResult, Dataset } from "../types";
 import { analyzeReviews, AnalysisError } from "../services/analyzeReviews";
 
 /**
@@ -17,10 +17,10 @@ export type AnalysisState =
 export function useAnalysis() {
   const [state, setState] = useState<AnalysisState>({ status: "idle" });
 
-  const analyze = useCallback(async (input: AnalysisInput) => {
+  const analyze = useCallback(async (input: AnalysisInput, dataset: Dataset) => {
     setState({ status: "loading" });
     try {
-      const result = await analyzeReviews(input);
+      const result = await analyzeReviews(input, dataset);
       setState(
         result.reviewCount === 0
           ? { status: "empty", result }
@@ -35,5 +35,8 @@ export function useAnalysis() {
     }
   }, []);
 
-  return { state, analyze };
+  // Reset to idle — used when the active dataset changes.
+  const reset = useCallback(() => setState({ status: "idle" }), []);
+
+  return { state, analyze, reset };
 }

@@ -1,25 +1,31 @@
-import type {
-  AnalysisInput,
-  AnalysisResult,
-  Finding,
-  Product,
-  Review,
-  ReviewStats,
-  Sentiment,
-} from "../types";
-import { getProduct } from "../data/products";
+import type { AnalysisInput, AnalysisResult, Finding, Product, Review, ReviewStats, Sentiment } from "../types";
+import { THEME_LIBRARY, type ThemeDef } from "./themeLibrary";
 
 /**
  * Pure, synchronous analysis engine. No React, no I/O, no latency — so it is
- * trivially testable and deterministic. The async service boundary
- * (analyzeReviews.ts) wraps this; a future real model would replace the wrapper
- * while keeping this contract.
+ * trivially testable and deterministic.
  *
- * Everything the engine returns is derived from the reviews that fall inside
- * the selected product and date range. Nothing is hardcoded per product except
- * the theme vocabulary (keywords + the action to recommend for a negative
- * theme) — the findings themselves only exist when reviews support them.
+ * It is a HEURISTIC, RATING-ASSISTED engine, not a natural-language sentiment
+ * model:
+ *   - Theme detection is deterministic keyword matching against a shared,
+ *     product-agnostic vocabulary (themeLibrary.ts).
+ *   - A mention is treated as praise when the review is rated >= 4, and as a
+ *     fault when rated <= 2. Rating 3 is neutral and supports neither.
+ *   - A theme only becomes a finding when at least MIN_EVIDENCE same-polarity
+ *     reviews support it, and every finding carries a real supporting quote —
+ *     sentiment is never asserted from the rating alone.
+ *
+ * The async boundary (analyzeReviews.ts) wraps this; a future real classifier
+ * or model can replace the engine while keeping the AnalysisResult contract.
  */
+
+/** Minimum same-polarity supporting reviews before a theme becomes a finding. */
+export const MIN_EVIDENCE = 2;
+
+/** Ratings at or above this count as positive evidence. */
+const POSITIVE_RATING = 4;
+/** Ratings at or below this count as negative evidence. */
+const NEGATIVE_RATING = 2;
 
 /** Error type the UI can distinguish from unexpected runtime failures. */
 export class AnalysisError extends Error {
@@ -27,15 +33,6 @@ export class AnalysisError extends Error {
     super(message);
     this.name = "AnalysisError";
   }
-}
-
-interface ThemeDef {
-  label: string;
-  sentiment: Sentiment;
-  /** Lowercase keywords; a review mentions the theme if its text includes any. */
-  keywords: string[];
-  /** Action to recommend when a negative theme appears in range. */
-  recommendation?: string;
 }
 
 /** Return reviews for a product within an inclusive date range, oldest first. */
@@ -64,10 +61,10 @@ export function reviewStatsFor(productId: string, reviews: Review[]): ReviewStat
 }
 
 /** Run the analysis for a product + date range against a set of reviews. */
-export function analyze(input: AnalysisInput, reviews: Review[]): AnalysisResult {
+export function analyze(input: AnalysisInput, reviews: Review[], products: Product[]): AnalysisResult {
   const { productId, from, to } = input;
 
-  const product = getProduct(productId);
+  const product = products.find((p) => p.id === productId);
   if (!product) {
     throw new AnalysisError(`Unknown product: ${productId}`);
   }
@@ -80,19 +77,28 @@ export function analyze(input: AnalysisInput, reviews: Review[]): AnalysisResult
   const averageRating =
     reviewCount === 0 ? 0 : round1(matched.reduce((sum, r) => sum + r.rating, 0) / reviewCount);
 
-  const themes = THEME_CATALOG[productId] ?? [];
-  const findings = themes
-    .map((theme) => buildFinding(theme, matched))
-    .filter((f): f is Finding => f !== null);
+  const praise: Finding[] = [];
+  const faults: Finding[] = [];
+  for (const theme of THEME_LIBRARY) {
+    const mentioning = matched.filter((r) => reviewMentions(r, theme));
+    if (mentioning.length === 0) continue;
 
-  const praise = findings.filter((f) => f.sentiment === "positive").sort(byMentions);
-  const faults = findings.filter((f) => f.sentiment === "negative").sort(byMentions);
+    const positives = mentioning.filter((r) => r.rating >= POSITIVE_RATING);
+    const negatives = mentioning.filter((r) => r.rating <= NEGATIVE_RATING);
 
-  // Recommendations only for negative themes that actually appear, ordered to
-  // match the faults (most-mentioned first).
-  const recByLabel = new Map(
-    themes.filter((t) => t.recommendation).map((t) => [t.label, t.recommendation as string]),
-  );
+    // A theme can surface in both columns when opinion is genuinely split.
+    if (positives.length >= MIN_EVIDENCE) {
+      praise.push(makeFinding(theme, "positive", positives, reviewCount));
+    }
+    if (negatives.length >= MIN_EVIDENCE) {
+      faults.push(makeFinding(theme, "negative", negatives, reviewCount));
+    }
+  }
+  praise.sort(byMentions);
+  faults.sort(byMentions);
+
+  // Recommendations only for fault themes present in range, ordered like faults.
+  const recByLabel = new Map(THEME_LIBRARY.map((t) => [t.label, t.recommendation]));
   const recommendations = faults
     .map((f) => recByLabel.get(f.label))
     .filter((rec): rec is string => Boolean(rec));
@@ -121,36 +127,33 @@ function reviewMentions(review: Review, theme: ThemeDef): boolean {
   return theme.keywords.some((kw) => text.includes(kw));
 }
 
-/** Build a finding for a theme, or null when no matched review mentions it. */
-function buildFinding(theme: ThemeDef, matched: Review[]): Finding | null {
-  const mentioning = matched.filter((r) => reviewMentions(r, theme));
-  if (mentioning.length === 0) return null;
-
-  const representative = pickRepresentative(mentioning, theme);
+/** Build an evidence-backed finding from same-polarity supporting reviews. */
+function makeFinding(theme: ThemeDef, sentiment: Sentiment, supporting: Review[], reviewCount: number): Finding {
+  const representative = pickRepresentative(supporting, sentiment, theme.keywords);
   return {
     label: theme.label,
-    sentiment: theme.sentiment,
-    mentions: mentioning.length,
-    percent: Math.round((mentioning.length / matched.length) * 100),
+    sentiment,
+    mentions: supporting.length,
+    percent: Math.round((supporting.length / reviewCount) * 100),
     quote: extractQuote(representative, theme.keywords),
-    quoteAuthor: representative.author,
+    quoteAuthor: attribution(representative),
   };
 }
 
 /**
- * Choose the review that best represents a theme. First prefer the most
+ * Choose the review that best represents a finding. First prefer the most
  * on-topic review (most theme keywords mentioned), so the quote clearly
  * illustrates the theme; then by sentiment strength (highest rating for
  * praise, lowest for a fault); then earliest date, so results are
  * deterministic regardless of engine sort stability.
  */
-function pickRepresentative(reviews: Review[], theme: ThemeDef): Review {
+function pickRepresentative(reviews: Review[], sentiment: Sentiment, keywords: string[]): Review {
   return [...reviews].sort((a, b) => {
-    const hitsA = keywordHits(a, theme.keywords);
-    const hitsB = keywordHits(b, theme.keywords);
+    const hitsA = keywordHits(a, keywords);
+    const hitsB = keywordHits(b, keywords);
     if (hitsA !== hitsB) return hitsB - hitsA;
     if (a.rating !== b.rating) {
-      return theme.sentiment === "positive" ? b.rating - a.rating : a.rating - b.rating;
+      return sentiment === "positive" ? b.rating - a.rating : a.rating - b.rating;
     }
     return a.date.localeCompare(b.date);
   })[0] as Review;
@@ -170,6 +173,13 @@ function extractQuote(review: Review, keywords: string[]): string {
     return keywords.some((kw) => lower.includes(kw));
   });
   return (hit ?? review.text).trim();
+}
+
+/** Attribution for a quote — named author if present, else an anonymous label. */
+function attribution(review: Review): string {
+  if (review.author) return review.author;
+  const who = review.verifiedPurchase ? "Verified buyer" : "Buyer";
+  return review.country ? `${who} · ${review.country}` : who;
 }
 
 function buildSummary(
@@ -198,10 +208,13 @@ function buildSummary(
     ? `${lowerFirst(bottom.label)} is the most common complaint (${bottom.mentions} of ${reviewCount})`
     : "";
 
+  if (top && bottom && top.label === bottom.label) {
+    return `${base}opinion is most divided on ${lowerFirst(top.label)} (${top.mentions} praise vs ${bottom.mentions} complaints).`;
+  }
   if (top && bottom) return `${base}${posClause}, while ${negClause}.`;
-  if (top) return `${base}${posClause}. No recurring complaints surface in this window.`;
-  if (bottom) return `${base}${negClause}. Little positive sentiment surfaces in this window.`;
-  return `${base}no recurring themes surface — individual reviews vary.`;
+  if (top) return `${base}${posClause}. No recurring complaints have enough evidence in this window.`;
+  if (bottom) return `${base}${negClause}. Little positive sentiment has enough evidence in this window.`;
+  return `${base}no themes reach the evidence threshold — individual reviews vary.`;
 }
 
 function lowerFirst(s: string): string {
@@ -211,76 +224,3 @@ function lowerFirst(s: string): string {
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
-
-/**
- * Theme vocabulary per product. Keywords are matched case-insensitively as
- * substrings of review text. Negative themes carry the action to recommend
- * when they appear. This is the only per-product knowledge in the engine — the
- * findings are still built solely from reviews in range.
- */
-const THEME_CATALOG: Record<string, ThemeDef[]> = {
-  "aurora-earbuds": [
-    { label: "Sound quality", sentiment: "positive", keywords: ["sound", "bass", "crisp", "audio"] },
-    { label: "Battery life", sentiment: "positive", keywords: ["battery"] },
-    { label: "Noise cancellation", sentiment: "positive", keywords: ["noise cancellation", "noise"] },
-    { label: "Comfort & fit", sentiment: "positive", keywords: ["comfortable", "comfort", "fit", "secure"] },
-    {
-      label: "Connectivity",
-      sentiment: "negative",
-      keywords: ["connection", "bluetooth", "dropping", "stutter"],
-      recommendation:
-        "Investigate the Bluetooth stack for the pocket/occlusion signal drops reported on calls.",
-    },
-    {
-      label: "Touch controls",
-      sentiment: "negative",
-      keywords: ["touch controls", "controls", "touch", "pausing"],
-      recommendation: "Add a setting to lower touch sensitivity or disable tap-to-pause.",
-    },
-    {
-      label: "Charging case",
-      sentiment: "negative",
-      keywords: ["case", "charging"],
-      recommendation: "Review charging-case contact reliability and build quality with the manufacturer.",
-    },
-  ],
-  "trailpeak-backpack": [
-    { label: "Comfort", sentiment: "positive", keywords: ["comfortable", "comfort", "straps", "hip belt", "padded"] },
-    { label: "Durability", sentiment: "positive", keywords: ["durable", "tough", "durability"] },
-    { label: "Storage", sentiment: "positive", keywords: ["storage", "pockets", "roomy", "spacious", "capacity"] },
-    {
-      label: "Zippers",
-      sentiment: "negative",
-      keywords: ["zipper", "zippers"],
-      recommendation: "Source higher-grade zippers or offer a warranty-backed replacement.",
-    },
-    {
-      label: "Water resistance",
-      sentiment: "negative",
-      keywords: ["rain", "waterproof", "damp", "storm"],
-      recommendation: "Bundle a rain cover or improve out-of-the-box water resistance.",
-    },
-  ],
-  "brewmaster-espresso": [
-    { label: "Espresso quality", sentiment: "positive", keywords: ["espresso", "crema", "shots", "shot"] },
-    { label: "Milk frother", sentiment: "positive", keywords: ["frother", "froth", "latte"] },
-    {
-      label: "Cleaning",
-      sentiment: "negative",
-      keywords: ["cleaning", "clean", "maintain", "maintenance", "tedious"],
-      recommendation: "Simplify cleaning with a removable, dishwasher-safe drip tray and portafilter.",
-    },
-    {
-      label: "Reliability",
-      sentiment: "negative",
-      keywords: ["pressure", "leaking", "leak", "stopped", "reliability"],
-      recommendation: "Investigate pressure-loss and leaking failures reported within the first months.",
-    },
-    {
-      label: "Noise & learning curve",
-      sentiment: "negative",
-      keywords: ["loud", "learning curve"],
-      recommendation: "Ship a quick-start guide and investigate operating noise.",
-    },
-  ],
-};
