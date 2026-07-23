@@ -29,9 +29,10 @@ Upload a CSV of reviews and ReviewIQ analyzes it in place — no backend. Requir
 columns: `review_id`, `product_id`, `product_name`, `category`, `review_date`
 (`YYYY-MM-DD`), `rating` (1–5), `review_text`. Optional: `review_title`,
 `verified_purchase`, `country`. See [`public/sample-reviews.csv`](public/sample-reviews.csv)
-for the exact format. Invalid rows (bad date/rating, duplicate id) are skipped and
-counted; the date range auto-fits the uploaded data. Everything is parsed in the
-browser — no reviews are uploaded to a server.
+for the exact format. Rows with a **strictly-invalid calendar date** (e.g.
+`2026-02-30`, `2026-13-01`), an out-of-range rating, or a duplicate id are
+skipped and counted; the date range auto-fits the uploaded data. Everything is
+parsed in the browser — no reviews are uploaded to a server.
 
 ## How the analysis works
 
@@ -41,12 +42,19 @@ browser — no reviews are uploaded to a server.
   not a natural-language sentiment model and not a live AI model.** A pure engine
   (`src/services/analysisEngine.ts`) filters reviews by product and date, then:
   - **detects themes** by deterministic keyword matching against a shared,
-    product-agnostic vocabulary (`src/services/themeLibrary.ts`);
+    product-agnostic vocabulary (`src/services/themeLibrary.ts`). Matching is
+    **whole-word for single tokens and bounded-phrase for multi-word keywords**
+    (`src/lib/matchKeyword.ts`), so `cleaner teeth` does not trigger `Cleaning`
+    and `hard to build` does not trigger `Build quality`;
   - **decides sentiment from the star rating** — a mention in a review rated ≥ 4
     is praise, ≤ 2 is a fault, and 3 is neutral;
   - only surfaces a theme once at least a **minimum number of same-polarity
     reviews** support it, and always attaches a real supporting quote — sentiment
     is never asserted from the rating alone.
+- Each finding's percentage is **that theme's supporting reviews as a share of
+  the reviews in the selected product and window** (shown as "N of M selected
+  reviews · P%") — not a share of all customers, all mentions, or overall
+  sentiment.
 - The same input always produces the same output, which keeps it easy to test.
 - Summaries are generated from the review data by this engine — they are
   **not** AI-generated.
@@ -100,7 +108,7 @@ React · TypeScript · Vite · Tailwind CSS · Vitest
 npm run dev        # start the dev server
 npm run typecheck  # tsc
 npm run lint       # eslint
-npm test           # vitest (analysis engine)
+npm test           # vitest (engine, keyword matching, date validation, CSV parsing)
 npm run build      # production build
 ```
 
