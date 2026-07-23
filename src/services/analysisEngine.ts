@@ -1,5 +1,6 @@
 import type { AnalysisInput, AnalysisResult, Finding, Product, Review, ReviewStats, Sentiment } from "../types";
 import { THEME_LIBRARY, type ThemeDef } from "./themeLibrary";
+import { matchesKeyword } from "../lib/matchKeyword";
 
 /**
  * Pure, synchronous analysis engine. No React, no I/O, no latency — so it is
@@ -123,8 +124,7 @@ function byMentions(a: Finding, b: Finding): number {
 }
 
 function reviewMentions(review: Review, theme: ThemeDef): boolean {
-  const text = review.text.toLowerCase();
-  return theme.keywords.some((kw) => text.includes(kw));
+  return theme.keywords.some((kw) => matchesKeyword(review.text, kw));
 }
 
 /** Build an evidence-backed finding from same-polarity supporting reviews. */
@@ -161,17 +161,18 @@ function pickRepresentative(reviews: Review[], sentiment: Sentiment, keywords: s
 
 /** Count how many distinct theme keywords appear in a review. */
 function keywordHits(review: Review, keywords: string[]): number {
-  const text = review.text.toLowerCase();
-  return keywords.reduce((n, kw) => n + (text.includes(kw) ? 1 : 0), 0);
+  return keywords.reduce((n, kw) => n + (matchesKeyword(review.text, kw) ? 1 : 0), 0);
 }
 
 /** Pull the sentence that mentions the theme, so the quote is on-topic. */
 function extractQuote(review: Review, keywords: string[]): string {
-  const sentences = review.text.split(/(?<=[.!?])\s+/);
-  const hit = sentences.find((s) => {
-    const lower = s.toLowerCase();
-    return keywords.some((kw) => lower.includes(kw));
-  });
+  const sentences = review.text.split(/([.!?])\s+/).reduce<string[]>((acc, part, i) => {
+    // Re-join sentence text with its trailing punctuation (odd indices).
+    if (i % 2 === 0) acc.push(part);
+    else acc[acc.length - 1] += part;
+    return acc;
+  }, []);
+  const hit = sentences.find((s) => keywords.some((kw) => matchesKeyword(s, kw)));
   return (hit ?? review.text).trim();
 }
 

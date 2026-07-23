@@ -248,6 +248,59 @@ describe("analyze — one-sided ranges", () => {
   });
 });
 
+describe("analyze — theme matching precision (whole-word)", () => {
+  const labels = (fs: { label: string }[]) => fs.map((f) => f.label);
+
+  it("does not produce a Cleaning finding from 'cleaner teeth'", () => {
+    const reviews: Review[] = [
+      review({ id: "a", date: "2026-02-01", rating: 5, text: "It leaves me with cleaner teeth every morning." }),
+      review({ id: "b", date: "2026-02-02", rating: 5, text: "Noticeably cleaner teeth after two weeks." }),
+    ];
+    const result = analyze(FULL, reviews, PRODUCTS);
+    expect(labels(result.praise)).not.toContain("Cleaning");
+    expect(labels(result.faults)).not.toContain("Cleaning");
+  });
+
+  it("still produces a Cleaning finding from 'easy to clean'", () => {
+    const reviews: Review[] = [
+      review({ id: "a", date: "2026-02-01", rating: 5, text: "The tray is easy to clean." }),
+      review({ id: "b", date: "2026-02-02", rating: 5, text: "Very easy to clean after each use." }),
+    ];
+    const result = analyze(FULL, reviews, PRODUCTS);
+    expect(labels(result.praise)).toContain("Cleaning");
+  });
+
+  it("does not produce a Build quality finding from 'hard to build'", () => {
+    const reviews: Review[] = [
+      review({ id: "a", date: "2026-02-01", rating: 2, text: "It was hard to build from the instructions." }),
+      review({ id: "b", date: "2026-02-02", rating: 2, text: "Really hard to build; parts did not line up." }),
+    ];
+    const result = analyze(FULL, reviews, PRODUCTS);
+    expect(labels(result.praise)).not.toContain("Build quality");
+    expect(labels(result.faults)).not.toContain("Build quality");
+    // The phrase legitimately belongs to Assembly.
+    expect(labels(result.faults)).toContain("Assembly");
+  });
+
+  it("still produces a Build quality finding from 'build quality feels sturdy'", () => {
+    const reviews: Review[] = [
+      review({ id: "a", date: "2026-02-01", rating: 5, text: "The build quality feels sturdy and solid." }),
+      review({ id: "b", date: "2026-02-02", rating: 5, text: "Excellent build quality throughout." }),
+    ];
+    const result = analyze(FULL, reviews, PRODUCTS);
+    expect(labels(result.praise)).toContain("Build quality");
+  });
+
+  it("matches themes case-insensitively", () => {
+    const reviews: Review[] = [
+      review({ id: "a", date: "2026-02-01", rating: 5, text: "GREAT SOUND, very clear." }),
+      review({ id: "b", date: "2026-02-02", rating: 5, text: "The SOUND is excellent." }),
+    ];
+    const result = analyze(FULL, reviews, PRODUCTS);
+    expect(labels(result.praise)).toContain("Sound quality");
+  });
+});
+
 describe("reviewStatsFor", () => {
   it("reports count and available date span for a product", () => {
     const reviews: Review[] = [

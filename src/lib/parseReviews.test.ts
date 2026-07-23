@@ -79,6 +79,26 @@ describe("parseReviewsCsv — validation", () => {
     expect(skipped).toBe(1);
   });
 
+  it("skips rows with impossible calendar dates, keeping valid ones", () => {
+    const text = csv(
+      "r1,p1,Widget,Electronics,2026-02-28,5,ok,Valid,true,US",
+      "r2,p1,Widget,Electronics,2026-02-30,4,ok,Impossible day,true,US",
+      "r3,p1,Widget,Electronics,2026-13-01,4,ok,Bad month,true,US",
+      "r4,p1,Widget,Electronics,2024-02-29,5,ok,Leap day valid,true,US",
+    );
+    const { dataset, skipped } = parseReviewsCsv(text, "f.csv");
+    expect(dataset.reviews.map((r) => r.id)).toEqual(["r1", "r4"]);
+    expect(skipped).toBe(2);
+  });
+
+  it("throws when no valid rows remain (all dates impossible)", () => {
+    const text = csv(
+      "r1,p1,Widget,Electronics,2026-02-30,5,ok,nope,true,US",
+      "r2,p1,Widget,Electronics,2026-00-10,5,ok,nope,true,US",
+    );
+    expect(() => parseReviewsCsv(text, "f.csv")).toThrow(/no valid review rows/i);
+  });
+
   it("throws when no valid rows remain", () => {
     const text = csv("r1,p1,Widget,Electronics,bad,9,ok,nope,true,US");
     expect(() => parseReviewsCsv(text, "f.csv")).toThrow(/no valid review rows/i);

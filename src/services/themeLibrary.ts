@@ -2,7 +2,8 @@
  * Shared, product-agnostic theme vocabulary.
  *
  * The engine detects a theme when a review's text contains one of its
- * keywords (case-insensitive substring match) — deterministic and
+ * keywords, matched case-insensitively as a whole word (single tokens) or a
+ * bounded phrase (multi-word), via matchKeyword.ts — deterministic and
  * explainable. Whether a mention is praise or a fault is decided separately,
  * from the review's star rating (see analysisEngine.ts), not from the theme.
  *
@@ -13,7 +14,7 @@
 export interface ThemeDef {
   key: string;
   label: string;
-  /** Lowercase keywords/phrases; multi-word phrases are matched as substrings. */
+  /** Lowercase keywords; single tokens match whole words, phrases match bounded. */
   keywords: string[];
   recommendation: string;
 }
@@ -23,7 +24,7 @@ export const THEME_LIBRARY: ThemeDef[] = [
   {
     key: "sound-quality",
     label: "Sound quality",
-    keywords: ["sound", "audio", "bass", "treble", "mids", "clarity", "crisp"],
+    keywords: ["sound", "sounds", "audio", "bass", "treble", "mids", "clarity", "crisp"],
     recommendation: "Dig into the reviews mentioning sound quality to confirm what is driving sentiment.",
   },
   {
@@ -68,7 +69,9 @@ export const THEME_LIBRARY: ThemeDef[] = [
   {
     key: "build-quality",
     label: "Build quality",
-    keywords: ["build quality", "build", "hinge", "crack", "cracked", "creak", "flimsy", "sturdy", "cheap", "well made", "well-made"],
+    // Bare "build" is dropped: it collides with "hard to build" (a verb). Use
+    // explicit noun-context phrases instead.
+    keywords: ["build quality", "solid build", "sturdy build", "build feels", "well built", "poorly built", "cheaply built", "hinge", "crack", "cracks", "cracked", "creak", "creaks", "flimsy", "sturdy", "well made", "well-made"],
     recommendation: "Examine build-quality complaints for a common failure point.",
   },
   {
@@ -169,7 +172,7 @@ export const THEME_LIBRARY: ThemeDef[] = [
   {
     key: "material",
     label: "Material quality",
-    keywords: ["material", "fabric", "mesh", "foam", "leather", "stitching", "upholstery"],
+    keywords: ["material", "materials", "fabric", "mesh", "foam", "leather", "stitching", "upholstery"],
     recommendation: "Examine material feedback for wear, pilling, or quality concerns.",
   },
   {

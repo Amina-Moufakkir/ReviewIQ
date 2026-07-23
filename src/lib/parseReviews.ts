@@ -1,5 +1,6 @@
 import type { Dataset, Product, Review } from "../types";
 import { parseCsv } from "./csv";
+import { isValidIsoDate } from "./date";
 
 /** Thrown when a CSV cannot be turned into a usable dataset. */
 export class CsvError extends Error {
@@ -20,7 +21,6 @@ const REQUIRED_COLUMNS = [
 ] as const;
 
 // Optional columns are used when present but never required.
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export interface ParseResult {
   dataset: Dataset;
@@ -70,8 +70,7 @@ export function parseReviewsCsv(text: string, label: string): ParseResult {
       id &&
       !seenIds.has(id) &&
       productId &&
-      ISO_DATE.test(date) &&
-      !Number.isNaN(Date.parse(date)) &&
+      isValidIsoDate(date) &&
       Number.isInteger(rating) &&
       rating >= 1 &&
       rating <= 5 &&

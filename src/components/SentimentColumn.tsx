@@ -40,8 +40,8 @@ export function SentimentColumn({ tone, title, findings, reviewCount }: Sentimen
                 <span className="text-sm font-medium text-ink">{f.label}</span>
               </div>
               <p className="font-mono text-[11px] text-ink-soft">
-                Mentioned in {f.mentions} of {reviewCount} review{reviewCount === 1 ? "" : "s"} ·{" "}
-                {f.percent}%
+                Mentioned in {f.mentions} of {reviewCount} selected review
+                {reviewCount === 1 ? "" : "s"} · {f.percent}%
               </p>
               <blockquote className="border-l border-rule pl-3">
                 <p className="text-sm italic leading-relaxed text-ink">“{f.quote}”</p>
