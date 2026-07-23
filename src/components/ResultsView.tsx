@@ -1,11 +1,16 @@
+import { useEffect, useRef, useState } from "react";
 import type { AnalysisResult, Finding } from "../types";
 import { formatDate } from "../lib/date";
+import { generateMarkdownReport } from "../lib/generateMarkdownReport";
+import { copyReportToClipboard } from "../lib/copyReport";
 import { SectionLabel } from "./SectionLabel";
 import { SentimentColumn } from "./SentimentColumn";
 
 interface ResultsViewProps {
   result: AnalysisResult;
 }
+
+type Toast = { message: string; tone: "success" | "error" };
 
 /** The full sentiment brief: findings lede, ledger, themes, recommendations. */
 export function ResultsView({ result }: ResultsViewProps) {
@@ -14,13 +19,64 @@ export function ResultsView({ result }: ResultsViewProps) {
     (a, b) => b.mentions - a.mentions || a.label.localeCompare(b.label),
   );
 
+  const [toast, setToast] = useState<Toast | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Auto-dismiss the toast; the cleanup makes repeated clicks and unmounts safe.
+  useEffect(() => {
+    if (!toast) return;
+    timerRef.current = setTimeout(() => setToast(null), 2500);
+    return () => clearTimeout(timerRef.current);
+  }, [toast]);
+
+  async function handleCopyReport() {
+    try {
+      await copyReportToClipboard(generateMarkdownReport(result));
+      setToast({ message: "Report copied", tone: "success" });
+    } catch {
+      setToast({ message: "Could not copy report", tone: "error" });
+    }
+  }
+
   return (
     <article className="animate-reveal flex flex-col gap-10">
       {/* Findings lede — the answer, up top, set in the display serif. */}
       <header className="border-l-2 border-ink pl-5">
-        <p className="font-mono text-xs font-medium uppercase tracking-[0.2em] text-ink-soft">
-          Findings
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <p className="font-mono text-xs font-medium uppercase tracking-[0.2em] text-ink-soft">
+            Findings
+          </p>
+          {/* Copy action with feedback anchored right beside it, so the
+              confirmation appears where the user is looking. The live region is
+              always present for assistive tech; the pill is absolutely
+              positioned so it never shifts the header layout. */}
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={handleCopyReport}
+              className="font-mono text-[11px] uppercase tracking-[0.15em] text-ink underline decoration-rule underline-offset-4 transition hover:decoration-ink focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+            >
+              Copy report
+            </button>
+            <span
+              aria-live="polite"
+              role="status"
+              className="pointer-events-none absolute right-0 top-full z-10 mt-2 flex justify-end"
+            >
+              {toast ? (
+                <span
+                  className={`whitespace-nowrap border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.15em] shadow-sm ${
+                    toast.tone === "error"
+                      ? "border-fault bg-card text-fault"
+                      : "border-ink bg-ink text-paper"
+                  }`}
+                >
+                  {toast.message}
+                </span>
+              ) : null}
+            </span>
+          </div>
+        </div>
         <h2 className="mt-2 font-display text-3xl font-medium leading-tight text-ink">
           {result.productName}
         </h2>
