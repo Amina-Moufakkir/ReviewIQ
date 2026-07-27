@@ -1,6 +1,7 @@
 import type { AnalysisInput, AnalysisResult, Finding, Product, Review, ReviewStats, Sentiment } from "../types";
 import { THEME_LIBRARY, type ThemeDef } from "./themeLibrary";
 import { matchesKeyword } from "../lib/matchKeyword";
+import { analyzePromotions } from "./promotionAnalysis";
 
 /**
  * Pure, synchronous analysis engine. No React, no I/O, no latency — so it is
@@ -114,6 +115,8 @@ export function analyze(input: AnalysisInput, reviews: Review[], products: Produ
     praise,
     faults,
     recommendations,
+    // Optional: present only when the matched reviews carry promotion data.
+    promotion: analyzePromotions(matched),
   };
 }
 
