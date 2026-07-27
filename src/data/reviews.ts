@@ -3,6 +3,10 @@ import type { Review } from "../types";
 // Mock review corpus spread across the first half of 2026 so date-range
 // filtering produces meaningfully different results. Text is written to be
 // realistic and to reflect each product's canned analysis themes.
+//
+// The AuroraSound earbuds also carry promotion/discount data on some reviews so
+// the discounts & promotions analysis is demonstrable with the built-in sample;
+// the other products deliberately omit it, exercising graceful degradation.
 export const reviews: Review[] = [
   // --- AuroraSound Wireless Earbuds (Audio) ---
   {
@@ -20,6 +24,8 @@ export const reviews: Review[] = [
     rating: 4,
     author: "Marcus T.",
     text: "Battery life easily gets me through a workday. Comfortable fit, though the case feels a little cheap.",
+    promotion: "Spring Sale",
+    discountPercent: 20,
   },
   {
     id: "r-aur-03",
@@ -28,6 +34,8 @@ export const reviews: Review[] = [
     rating: 2,
     author: "Dana L.",
     text: "The Bluetooth connection keeps dropping when my phone is in my pocket. Very frustrating on calls.",
+    promotion: "Spring Sale",
+    discountPercent: 20,
   },
   {
     id: "r-aur-04",
@@ -52,6 +60,8 @@ export const reviews: Review[] = [
     rating: 4,
     author: "Aisha B.",
     text: "Battery lasts for days and the fit is secure while running. Occasional connection stutter outdoors.",
+    promotion: "Launch Offer",
+    discountPercent: 15,
   },
   {
     id: "r-aur-07",
@@ -68,6 +78,8 @@ export const reviews: Review[] = [
     rating: 5,
     author: "Elena V.",
     text: "Love the sound and the comfort. Wore them on a six hour flight and the noise cancellation was excellent.",
+    promotion: "Launch Offer",
+    discountPercent: 15,
   },
   {
     id: "r-aur-09",
@@ -84,6 +96,8 @@ export const reviews: Review[] = [
     rating: 2,
     author: "Nadia F.",
     text: "Kept dropping connection during video calls. When it works the sound is genuinely good.",
+    promotion: "Spring Sale",
+    discountPercent: 20,
   },
   {
     id: "r-aur-11",

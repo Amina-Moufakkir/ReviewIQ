@@ -5,6 +5,7 @@ import { generateMarkdownReport } from "../lib/generateMarkdownReport";
 import { copyReportToClipboard } from "../lib/copyReport";
 import { SectionLabel } from "./SectionLabel";
 import { SentimentColumn } from "./SentimentColumn";
+import { PromotionPanel } from "./PromotionPanel";
 
 interface ResultsViewProps {
   result: AnalysisResult;
@@ -107,6 +108,9 @@ export function ResultsView({ result }: ResultsViewProps) {
           />
         </div>
       </div>
+
+      {/* Discounts & promotions — shown only when the dataset carries it. */}
+      {result.promotion ? <PromotionPanel insight={result.promotion} /> : null}
 
       {/* Recurring themes — a quick scan, colored by sentiment. */}
       <div>
