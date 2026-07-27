@@ -94,6 +94,8 @@ export function parseReviewsCsv(text: string, label: string): ParseResult {
       category,
       verifiedPurchase: "verified_purchase" in index ? cell(row, "verified_purchase") === "true" : undefined,
       country: "country" in index ? cell(row, "country") || undefined : undefined,
+      promotion: "promotion" in index ? cell(row, "promotion") || undefined : undefined,
+      discountPercent: "discount_percent" in index ? parseDiscount(cell(row, "discount_percent")) : undefined,
     });
 
     if (!productMap.has(productId)) {
@@ -110,4 +112,15 @@ export function parseReviewsCsv(text: string, label: string): ParseResult {
     dataset: { products, reviews, source: "uploaded", label },
     skipped,
   };
+}
+
+/**
+ * Parse an optional discount cell into a 0–100 percentage. Blank or malformed
+ * values yield `undefined` (the field is optional and never blocks a row).
+ */
+function parseDiscount(raw: string): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw.replace(/%$/, ""));
+  if (!Number.isFinite(n) || n < 0 || n > 100) return undefined;
+  return n;
 }
