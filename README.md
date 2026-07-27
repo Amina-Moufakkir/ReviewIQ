@@ -18,6 +18,8 @@ The core MVP is complete. An analyst can:
 - Run the analysis
 - View a structured brief: overall summary, what customers praise, what they
   fault, recurring themes, and recommended actions
+- See a **discounts & promotions** breakdown when the data supports it —
+  how promoted purchases compare with full-price ones on average rating
 
 Every insight — findings, mention counts, percentages, representative quotes,
 and the summary — is derived only from the reviews inside the selected product
@@ -28,7 +30,7 @@ and date range.
 Upload a CSV of reviews and ReviewIQ analyzes it in place — no backend. Required
 columns: `review_id`, `product_id`, `product_name`, `category`, `review_date`
 (`YYYY-MM-DD`), `rating` (1–5), `review_text`. Optional: `review_title`,
-`verified_purchase`, `country`. See [`public/sample-reviews.csv`](public/sample-reviews.csv)
+`verified_purchase`, `country`, `promotion`, `discount_percent`. See [`public/sample-reviews.csv`](public/sample-reviews.csv)
 for the exact format. Rows with a **strictly-invalid calendar date** (e.g.
 `2026-02-30`, `2026-13-01`), an out-of-range rating, or a duplicate id are
 skipped and counted; the date range auto-fits the uploaded data. Everything is
@@ -55,6 +57,13 @@ parsed in the browser — no reviews are uploaded to a server.
   the reviews in the selected product and window** (shown as "N of M selected
   reviews · P%") — not a share of all customers, all mentions, or overall
   sentiment.
+- **Discounts & promotions** (`src/services/promotionAnalysis.ts`) is a separate,
+  additive step over the same matched reviews. A review counts as a *promoted
+  purchase* when it has a non-empty `promotion` label or a positive
+  `discount_percent`; the section compares promoted vs full-price purchases on
+  average rating. It appears **only when the matched reviews carry promotion
+  data** — datasets without it (including the bundled CSV) simply omit the
+  section, so nothing breaks.
 - The same input always produces the same output, which keeps it easy to test.
 - Summaries are generated from the review data by this engine — they are
   **not** AI-generated.
@@ -87,6 +96,8 @@ Columns:
 | `review_text` | Review body |
 | `verified_purchase` | `true` or `false` |
 | `country` | Short code (US, UK, CA, AU, NZ, IE) |
+| `promotion` | *(optional)* Promotion/discount label, e.g. `Spring Sale` |
+| `discount_percent` | *(optional)* Discount applied, 0–100 |
 
 It is deliberately designed to exercise product/date filtering, recurring
 themes, evidence-backed findings, representative quotes, uneven review volume,
