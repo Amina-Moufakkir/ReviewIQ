@@ -40,48 +40,79 @@ parsed in the browser — no reviews are uploaded to a server.
 
 ## How the analysis works
 
-- No backend, database, or accounts. Data comes from the built-in sample or a CSV
-  you provide, and is parsed entirely in the browser.
-- The current analysis is a **deterministic, heuristic, rating-assisted engine —
-  not a natural-language sentiment model and not a live AI model.** A pure engine
-  (`src/services/analysisEngine.ts`) filters reviews by product and date, then:
-  - **detects themes** by deterministic keyword matching against a shared,
-    product-agnostic vocabulary (`src/services/themeLibrary.ts`). Matching is
-    **whole-word for single tokens and bounded-phrase for multi-word keywords**
-    (`src/lib/matchKeyword.ts`), so `cleaner teeth` does not trigger `Cleaning`
-    and `hard to build` does not trigger `Build quality`;
-  - **decides sentiment from the star rating** — a mention in a review rated ≥ 4
-    is praise, ≤ 2 is a fault, and 3 is neutral;
-  - only surfaces a theme once at least a **minimum number of same-polarity
-    reviews** support it, and always attaches a real supporting quote — sentiment
-    is never asserted from the rating alone.
-- Each finding's percentage is **that theme's supporting reviews as a share of
-  the reviews in the selected product and window** (shown as "N of M selected
-  reviews · P%") — not a share of all customers, all mentions, or overall
-  sentiment.
-- **Discounts & promotions** (`src/services/promotionAnalysis.ts`) is a separate,
-  additive step over the same matched reviews. A review counts as a *promoted
-  purchase* when it has a non-empty `promotion` label or a positive
-  `discount_percent`; the section compares promoted vs full-price purchases on
-  average rating. It appears **only when the matched reviews carry promotion
-  data** — datasets without it (including the bundled CSV) simply omit the
-  section, so nothing breaks.
-- The same input always produces the same output, which keeps it easy to test.
-- Summaries are generated from the review data by this engine — they are
-  **not** AI-generated.
+ReviewIQ has **two analysis engines** behind a single async boundary,
+`analyzeReviews()` in `src/services/analyzeReviews.ts`. The UI and the
+`AnalysisResult` contract are identical no matter which engine runs — only
+the engine that produces the tags changes. Selection is by configuration
+(`VITE_ANALYSIS_ENGINE`), not a user-facing toggle.
 
-### Two engines behind one boundary
+No backend, database, or accounts are required for either engine's data: reviews
+come from the built-in sample or a CSV you provide, and are parsed entirely in
+the browser.
 
-The UI talks to the analysis through a single async boundary,
-`analyzeReviews()` in `src/services/analyzeReviews.ts`. There are now **two**
-engines behind it, selected by build-time config (`VITE_ANALYSIS_ENGINE`), with
-no UI toggle:
+### Engine 1 — Heuristic (default, no backend, fully static)
 
-- **`heuristic`** (default) — the deterministic engine described above.
-- **`claude`** — a Claude-powered **semantic tagging** engine (see below).
+A deterministic, rating-assisted engine (`src/services/analysisEngine.ts`)
+that runs entirely in the browser with no API calls. It:
 
-Both return the same `AnalysisResult`, so the entire UI is unchanged. See
-[Claude engine & Vercel deployment](#claude-engine--vercel-deployment).
+- **detects themes** by whole-word / bounded-phrase keyword matching against a
+  shared vocabulary (`src/services/themeLibrary.ts`, `src/lib/matchKeyword.ts`),
+  so `cleaner teeth` does not trigger `Cleaning`;
+- **decides sentiment from the star rating** — ≥ 4 is praise, ≤ 2 is a fault,
+  3 is neutral;
+- only surfaces a theme once a minimum number of same-polarity reviews support
+  it, and always attaches a real supporting quote;
+- adds a **discounts & promotions** breakdown (`src/services/promotionAnalysis.ts`)
+  when the reviews carry promotion data — comparing promoted vs full-price
+  purchases on average rating; datasets without it simply omit the section.
+
+Each finding's percentage is that theme's supporting reviews as a share of the
+reviews in the selected product and window ("N of M selected reviews · P%").
+Because it needs no server, this engine powers the static **GitHub Pages demo**,
+and it is deterministic — the same input always produces the same output.
+
+### Engine 2 — Claude (semantic, server-side)
+
+A Claude-powered engine that understands the actual language of the reviews
+rather than matching a fixed keyword list. It:
+
+- identifies themes from the reviews' own wording and clusters semantically
+  equivalent phrasings under one canonical label (e.g. "died after a week",
+  "won't hold a charge", "battery's useless" → one battery-life theme);
+- assigns sentiment from the **review text**, per theme mention — so a 4-star
+  review that contains a real complaint is correctly counted as a fault;
+- returns only structured tags; **all counts, percentages, and quotes are still
+  computed in TypeScript from the real reviews** — never taken from model prose.
+
+So the summary sentence and every number are computed in code under **both**
+engines; what the Claude engine changes is *how themes and per-mention sentiment
+are detected* (language understanding vs. a fixed keyword list + star rating).
+
+### Security model
+
+The Claude call runs **server-side only**, in a Vercel serverless function at
+`api/analyze.ts`. The `ANTHROPIC_API_KEY` lives only in the server environment
+(a Vercel Environment Variable), is never bundled into the browser, and is never
+prefixed `VITE_`. The browser sends the filtered reviews to `/api/analyze` and
+receives back validated tags or a controlled error.
+
+### Selecting an engine
+
+Set `VITE_ANALYSIS_ENGINE` in the environment:
+
+| Value       | Engine    | Where it runs                        |
+| ----------- | --------- | ------------------------------------ |
+| `heuristic` | Engine 1  | Browser only (GitHub Pages demo)     |
+| `claude`    | Engine 2  | Vercel (`api/analyze.ts`) + browser  |
+
+`VITE_ANALYSIS_ENGINE` carries only the engine name — it is **not** a secret and
+contains no key. When Claude mode is selected and the call fails, the app
+surfaces a controlled error; it does **not** silently fall back to the heuristic
+engine.
+
+For the Claude engine's endpoint behavior, request limits, secret configuration,
+`vercel dev`, deployment, and cost, see
+[Claude engine & Vercel deployment](#claude-engine--vercel-deployment) below.
 
 ## Sample dataset (for CSV-upload development)
 
@@ -225,5 +256,7 @@ npm run build      # production build
 
 ## Status
 
-✅ Core MVP complete — CSV upload + deterministic, heuristic analysis over
-sample or uploaded data.
+✅ Core MVP complete — CSV upload + a deterministic heuristic engine, plus an
+optional Claude-powered semantic-tagging engine behind the same
+`analyzeReviews()` boundary (server-side key, controlled errors, identical UI
+and `AnalysisResult`). Engine chosen by `VITE_ANALYSIS_ENGINE`.
