@@ -230,6 +230,29 @@ Vercel's **Hobby** (free) tier, serverless functions are subject to
 execution-time and monthly-invocation limits — fine for a demo, but the Claude
 API itself is billed to your Anthropic account regardless of tier.
 
+### Model choice (provisional — benchmark deferred)
+
+The default model is **`claude-opus-4-8`**, overridable per deployment with the
+`ANTHROPIC_MODEL` env var. This is a **deliberate but provisional MVP decision**,
+not a benchmarked one:
+
+- **Why Opus for now:** it was verified working end-to-end — clean canonical
+  theme clustering, correct per-mention sentiment on high-star reviews with real
+  complaints, and exact evidence spans. For an MVP the bar is "does it work,"
+  which Opus clears.
+- **Why it's low-risk to defer optimizing:** production runs the *heuristic*
+  engine (no Opus cost today — Claude is opt-in), and the model is a one-line
+  `ANTHROPIC_MODEL` override, so choosing a cheaper default later costs nothing
+  to change. **`claude-haiku-4-5`** and **`claude-sonnet-5`** are the obvious
+  cost/latency candidates.
+- **When to revisit:** once the Claude engine carries real traffic, benchmark a
+  fixed evaluation set across Haiku / Sonnet / Opus and judge on **canonical
+  theme consistency, mixed-sentiment accuracy, evidence-span validity, latency,
+  and cost** (evidence-span validity is scored deterministically by the existing
+  `validateTags`). That turns the default from an assumption into a measured
+  decision against a representative workload — which a small demo eval set can't
+  yet stand in for.
+
 ### How the two deployments coexist
 
 - **GitHub Pages** — the existing deploy, **heuristic-only** demo. It never sets
