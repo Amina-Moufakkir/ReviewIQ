@@ -157,10 +157,17 @@ vercel link              # link this dir to the Vercel project (creates .vercel/
 vercel dev               # runs the frontend + /api together, loads Dev env vars
 ```
 
-`vercel dev` automatically loads the project's **Development**-scoped environment
-variables (including `ANTHROPIC_API_KEY`) into memory — no separate env-pull
-step. To exercise the Claude engine locally, build/run with
-`VITE_ANALYSIS_ENGINE=claude`.
+To exercise the Claude engine locally, run with `VITE_ANALYSIS_ENGINE=claude`,
+e.g. `VITE_ANALYSIS_ENGINE=claude vercel dev`.
+
+**Where the key must live for `vercel dev`:** the `/api/analyze` **function**
+reads `ANTHROPIC_API_KEY` from Vercel's **Development**-scoped environment
+variables — set it there (`vercel env add ANTHROPIC_API_KEY development`) and
+`vercel dev` injects it into the function automatically. Note that a local
+`.env.local` file feeds the **frontend/build** but is **not** injected into the
+function runtime; if your key only lives in `.env.local`, load it into the shell
+first (`set -a; . ./.env.local; set +a; vercel dev`) or the function will return
+the controlled `500 server_misconfigured`.
 
 ### Production secret configuration
 
