@@ -23,6 +23,15 @@ export interface Review {
   verifiedPurchase?: boolean;
   /** Short country code, e.g. "US". */
   country?: string;
+  /**
+   * Promotion or discount label the purchase was made under, e.g. "Spring Sale".
+   * Present only when the dataset carries promotion information. A non-empty
+   * value (or a positive `discountPercent`) marks the review as a promoted
+   * purchase.
+   */
+  promotion?: string;
+  /** Discount applied to the purchase, 0–100. Optional, like `promotion`. */
+  discountPercent?: number;
 }
 
 /** A set of products and their reviews, from the built-in sample or an upload. */
@@ -61,6 +70,31 @@ export interface AnalysisInput {
   to: string;
 }
 
+/**
+ * How discounts/promotions relate to feedback in the matched reviews. Derived
+ * only from reviews that carry promotion data; absent when the dataset has no
+ * promotion information (or no promoted purchases in the window), so the UI can
+ * degrade gracefully.
+ */
+export interface PromotionInsight {
+  /** Matched reviews whose purchase was under a promotion or discount. */
+  promoCount: number;
+  /** Matched reviews at full price (no promotion). */
+  fullPriceCount: number;
+  /** Average rating of promoted-purchase reviews, 1dp (0 when none). */
+  promoAverageRating: number;
+  /** Average rating of full-price reviews, 1dp (0 when none). */
+  fullPriceAverageRating: number;
+  /** promoAverageRating − fullPriceAverageRating, 1dp. 0 when not comparable. */
+  ratingDelta: number;
+  /** Distinct promotion labels among promoted reviews, sorted. */
+  promotions: string[];
+  /** True when both groups have reviews, so the delta is a real comparison. */
+  comparable: boolean;
+  /** Short, human-readable relationship note derived from the numbers above. */
+  note: string;
+}
+
 /** Structured output of an analysis run — all derived from matched reviews. */
 export interface AnalysisResult {
   productName: string;
@@ -72,6 +106,8 @@ export interface AnalysisResult {
   praise: Finding[];
   faults: Finding[];
   recommendations: string[];
+  /** Discount/promotion relationship, when the data supports it. */
+  promotion?: PromotionInsight;
 }
 
 /** Sample-data context for a product, used to guide range selection. */

@@ -301,6 +301,32 @@ describe("analyze — theme matching precision (whole-word)", () => {
   });
 });
 
+describe("analyze — promotion insight", () => {
+  it("omits the promotion insight when no matched review carries promotion data", () => {
+    const reviews: Review[] = [
+      review({ id: "a", date: "2026-02-01", rating: 5, text: "Great sound." }),
+      review({ id: "b", date: "2026-02-02", rating: 4, text: "Good battery." }),
+    ];
+    const result = analyze(FULL, reviews, PRODUCTS);
+    expect(result.promotion).toBeUndefined();
+  });
+
+  it("includes a promotion insight comparing promoted vs full-price reviews", () => {
+    const reviews: Review[] = [
+      review({ id: "p1", date: "2026-02-01", rating: 2, text: "Okay sound.", promotion: "Spring Sale", discountPercent: 20 }),
+      review({ id: "p2", date: "2026-02-02", rating: 2, text: "Meh sound.", promotion: "Spring Sale", discountPercent: 20 }),
+      review({ id: "f1", date: "2026-02-03", rating: 5, text: "Superb sound." }),
+      review({ id: "f2", date: "2026-02-04", rating: 5, text: "Excellent sound." }),
+    ];
+    const result = analyze(FULL, reviews, PRODUCTS);
+    expect(result.promotion).toBeDefined();
+    expect(result.promotion!.promoCount).toBe(2);
+    expect(result.promotion!.fullPriceCount).toBe(2);
+    expect(result.promotion!.ratingDelta).toBe(-3);
+    expect(result.promotion!.promotions).toEqual(["Spring Sale"]);
+  });
+});
+
 describe("reviewStatsFor", () => {
   it("reports count and available date span for a product", () => {
     const reviews: Review[] = [

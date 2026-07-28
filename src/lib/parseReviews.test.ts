@@ -50,6 +50,49 @@ describe("parseReviewsCsv — valid data", () => {
   });
 });
 
+describe("parseReviewsCsv — optional promotion columns", () => {
+  const PROMO_HEADER =
+    "review_id,product_id,product_name,category,review_date,rating,review_text,promotion,discount_percent";
+  const promoCsv = (...rows: string[]) => [PROMO_HEADER, ...rows].join("\n") + "\n";
+
+  it("reads promotion label and discount percent when present", () => {
+    const text = promoCsv(
+      "r1,p1,Widget,Electronics,2026-01-05,5,Great,Spring Sale,20",
+      "r2,p1,Widget,Electronics,2026-02-05,4,Fine,,",
+    );
+    const { dataset } = parseReviewsCsv(text, "f.csv");
+    const r1 = dataset.reviews.find((r) => r.id === "r1")!;
+    const r2 = dataset.reviews.find((r) => r.id === "r2")!;
+    expect(r1.promotion).toBe("Spring Sale");
+    expect(r1.discountPercent).toBe(20);
+    // Blank promotion cells become undefined (full-price purchase).
+    expect(r2.promotion).toBeUndefined();
+    expect(r2.discountPercent).toBeUndefined();
+  });
+
+  it("ignores an out-of-range or malformed discount without dropping the row", () => {
+    const text = promoCsv(
+      "r1,p1,Widget,Electronics,2026-01-05,5,Great,Sale,150",
+      "r2,p1,Widget,Electronics,2026-02-05,4,Fine,Sale,abc",
+    );
+    const { dataset, skipped } = parseReviewsCsv(text, "f.csv");
+    expect(skipped).toBe(0);
+    expect(dataset.reviews.map((r) => r.id)).toEqual(["r1", "r2"]);
+    expect(dataset.reviews[0]!.discountPercent).toBeUndefined();
+    expect(dataset.reviews[1]!.discountPercent).toBeUndefined();
+  });
+
+  it("leaves promotion fields undefined when the columns are absent", () => {
+    // The standard HEADER has no promotion columns — this is the degrade path.
+    const { dataset } = parseReviewsCsv(
+      csv("r1,p1,Widget,Electronics,2026-01-05,5,ok,Good sound,true,US"),
+      "f.csv",
+    );
+    expect(dataset.reviews[0]!.promotion).toBeUndefined();
+    expect(dataset.reviews[0]!.discountPercent).toBeUndefined();
+  });
+});
+
 describe("parseReviewsCsv — validation", () => {
   it("throws when a required column is missing", () => {
     const bad = "review_id,product_id,review_date,rating,review_text\nr1,p1,2026-01-05,5,hi\n";
