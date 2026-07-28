@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import Anthropic from "@anthropic-ai/sdk";
+// Explicit .js extension: the deployed function runs as native ESM (the repo is
+// "type": "module"), where extensionless relative imports do not resolve. This
+// is the function's only runtime relative import — claudeTags' own `import type`
+// of ../types is erased at compile time.
 import {
   MAX_REQUEST_BODY_BYTES,
   MAX_REVIEWS_PER_REQUEST,
   MAX_TOTAL_REVIEW_TEXT_BYTES,
   toRawTag,
   validateModelResponse,
-} from "../src/services/claudeTags";
+} from "../src/services/claudeTags.js";
 
 // Allow up to the Claude call's own 30s timeout plus response overhead.
 export const config = { maxDuration: 60 };
