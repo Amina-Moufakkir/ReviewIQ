@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   normalizeTheme,
+  parseReviewRequest,
   parseTagArray,
   stripCodeFence,
   validateModelResponse,
@@ -141,5 +142,63 @@ describe("parseTagArray / stripCodeFence / validateModelResponse", () => {
     const { valid, rejected } = validateModelResponse(raw, REVIEWS);
     expect(valid).toHaveLength(0);
     expect(rejected).toBe(3);
+  });
+});
+
+describe("parseReviewRequest", () => {
+  const ok = (...reviews: unknown[]) => parseReviewRequest({ reviews });
+
+  it("accepts a well-formed request and narrows it", () => {
+    const result = ok(
+      { id: "r1", text: "Great sound", rating: 5 },
+      { id: "r2", text: "Meh" }, // rating optional
+    );
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toEqual([
+      { id: "r1", text: "Great sound", rating: 5 },
+      { id: "r2", text: "Meh", rating: undefined },
+    ]);
+  });
+
+  it("rejects a non-object body or a missing/empty reviews array", () => {
+    expect(parseReviewRequest(null)).toMatchObject({ invalid: expect.any(String) });
+    expect(parseReviewRequest("nope")).toMatchObject({ invalid: expect.any(String) });
+    expect(parseReviewRequest({})).toMatchObject({ invalid: expect.any(String) });
+    expect(parseReviewRequest({ reviews: [] })).toMatchObject({ invalid: expect.any(String) });
+    expect(parseReviewRequest({ reviews: "x" })).toMatchObject({ invalid: expect.any(String) });
+  });
+
+  it("rejects a non-object review entry", () => {
+    expect(ok("just a string")).toMatchObject({ invalid: expect.any(String) });
+    expect(ok(null)).toMatchObject({ invalid: expect.any(String) });
+  });
+
+  it("rejects blank / whitespace-only / non-string ids and text", () => {
+    expect(ok({ id: "", text: "t" })).toMatchObject({ invalid: expect.any(String) });
+    expect(ok({ id: "   ", text: "t" })).toMatchObject({ invalid: expect.any(String) }); // whitespace-only id
+    expect(ok({ id: 1, text: "t" })).toMatchObject({ invalid: expect.any(String) });
+    expect(ok({ id: "r1", text: "" })).toMatchObject({ invalid: expect.any(String) });
+    expect(ok({ id: "r1", text: "  \n " })).toMatchObject({ invalid: expect.any(String) }); // whitespace-only text
+    expect(ok({ id: "r1", text: 5 })).toMatchObject({ invalid: expect.any(String) });
+  });
+
+  it("rejects duplicate review ids", () => {
+    const result = ok({ id: "r1", text: "a" }, { id: "r1", text: "b" });
+    expect(result).toMatchObject({ invalid: expect.stringContaining("duplicate") });
+  });
+
+  it("rejects out-of-contract ratings (NaN, Infinity, non-integer, out of 1–5)", () => {
+    for (const rating of [NaN, Infinity, -Infinity, 0, 6, 400, 3.5, -1, "5", true]) {
+      expect(ok({ id: "r1", text: "t", rating }), `rating=${String(rating)}`).toMatchObject({
+        invalid: expect.any(String),
+      });
+    }
+  });
+
+  it("accepts every valid integer rating and an omitted rating", () => {
+    for (const rating of [1, 2, 3, 4, 5]) {
+      expect(Array.isArray(ok({ id: "r1", text: "t", rating })), `rating=${rating}`).toBe(true);
+    }
+    expect(Array.isArray(ok({ id: "r1", text: "t" }))).toBe(true); // omitted
   });
 });

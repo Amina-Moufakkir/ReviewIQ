@@ -9,8 +9,10 @@ import {
   MAX_REQUEST_BODY_BYTES,
   MAX_REVIEWS_PER_REQUEST,
   MAX_TOTAL_REVIEW_TEXT_BYTES,
+  parseReviewRequest,
   toRawTag,
   validateModelResponse,
+  type IncomingReview,
 } from "../src/services/claudeTags.js";
 
 // Allow up to the Claude call's own 30s timeout plus response overhead.
@@ -36,12 +38,6 @@ Output STRICT JSON only — a single array, no prose, no markdown code fences. E
 {"review_id": string, "theme": string, "sentiment": "praise" | "fault" | "neutral", "evidence_span": string}
 Output ONLY the JSON array.`;
 
-interface IncomingReview {
-  id: string;
-  text: string;
-  rating?: number;
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   const requestId = randomUUID();
   const startedAt = Date.now();
@@ -57,10 +53,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return sendError(res, 413, "payload_too_large", "The request body is too large.");
   }
 
-  const reviews = parseReviews(req.body);
-  if (reviews === "invalid") {
-    return sendError(res, 400, "invalid_request", "Expected a non-empty list of reviews with id and text.");
+  const parsed = parseReviewRequest(req.body);
+  if (!Array.isArray(parsed)) {
+    log(requestId, 0, 400, startedAt, `invalid_request ${parsed.invalid}`);
+    return sendError(res, 400, "invalid_request", parsed.invalid);
   }
+  const reviews = parsed;
   if (reviews.length > MAX_REVIEWS_PER_REQUEST) {
     return sendError(res, 413, "too_many_reviews", `At most ${MAX_REVIEWS_PER_REQUEST} reviews can be analyzed at once.`);
   }
@@ -144,24 +142,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 }
 
 // --- helpers ----------------------------------------------------------------
-
-/** Validate and narrow the request body to the reviews list, or "invalid". */
-function parseReviews(body: unknown): IncomingReview[] | "invalid" {
-  if (typeof body !== "object" || body === null) return "invalid";
-  const raw = (body as { reviews?: unknown }).reviews;
-  if (!Array.isArray(raw) || raw.length === 0) return "invalid";
-
-  const reviews: IncomingReview[] = [];
-  for (const item of raw) {
-    if (typeof item !== "object" || item === null) return "invalid";
-    const r = item as Record<string, unknown>;
-    if (typeof r.id !== "string" || r.id === "") return "invalid";
-    if (typeof r.text !== "string" || r.text === "") return "invalid";
-    if (r.rating !== undefined && typeof r.rating !== "number") return "invalid";
-    reviews.push({ id: r.id, text: r.text, rating: r.rating as number | undefined });
-  }
-  return reviews;
-}
 
 /** The user turn: reviews as JSON, ratings included only as context. */
 function buildUserContent(reviews: IncomingReview[]): string {
