@@ -91,8 +91,8 @@ describe("analyzeWithClaude — failures never fall back to the heuristic engine
   });
 });
 
-describe("analyzeWithClaude — defensive re-validation (second gate)", () => {
-  it("throws when tags were returned but NONE survive validation (all-rejected gate)", async () => {
+describe("analyzeWithClaude — strict response integrity (second gate)", () => {
+  it("throws when ALL server tags fail validation", async () => {
     mockFetch(() =>
       jsonResponse({
         tags: [
@@ -102,24 +102,34 @@ describe("analyzeWithClaude — defensive re-validation (second gate)", () => {
         ],
       }),
     );
-    // Every entry is invalid (unknown id / bad sentiment / bad evidence). This is
-    // a failed provider response, not an empty result → controlled failure.
     await expect(analyzeWithClaude(INPUT, DATASET)).rejects.toBeInstanceOf(AnalysisError);
   });
 
-  it("still discards SOME invalid tags while keeping the valid ones", async () => {
+  it("throws when ANY server tag fails validation (a trusted payload must be fully valid)", async () => {
     mockFetch(() =>
       jsonResponse({
         tags: [
-          { review_id: "r1", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable to wear" },
-          { review_id: "r2", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable for long days" },
+          { review_id: "r1", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable to wear" }, // valid
+          { review_id: "r2", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable for long days" }, // valid
           { review_id: "ghost", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable to wear" }, // invalid
         ],
       }),
     );
-    const result = await analyzeWithClaude(INPUT, DATASET);
-    // Two valid Comfort mentions survive → a finding; the invalid one is dropped.
-    expect(result.praise.find((f) => f.label === "Comfort")?.mentions).toBe(2);
+    // Strict: a single invalid tag from the trusted server fails the whole request
+    // (server/client mismatch or defect) rather than silently keeping the valid two.
+    await expect(analyzeWithClaude(INPUT, DATASET)).rejects.toBeInstanceOf(AnalysisError);
+  });
+
+  it("throws when the server returns a duplicate tag (server should have deduplicated)", async () => {
+    mockFetch(() =>
+      jsonResponse({
+        tags: [
+          { review_id: "r1", theme: "Comfort", sentiment: "praise", evidence_span: "Very comfortable to wear" },
+          { review_id: "r1", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable to wear" }, // dup {id,theme,sentiment}
+        ],
+      }),
+    );
+    await expect(analyzeWithClaude(INPUT, DATASET)).rejects.toBeInstanceOf(AnalysisError);
   });
 
   it("treats a genuinely empty tag array as a legitimate empty result (no throw)", async () => {

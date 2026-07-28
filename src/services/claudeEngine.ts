@@ -63,18 +63,23 @@ export async function analyzeWithClaude(
     throw new AnalysisError("The analysis service returned an unexpected response.");
   }
 
-  // Second gate: re-validate every entry against the reviews we sent. Anything
-  // malformed is discarded here, so provider output never reaches the UI raw.
+  // Second gate — STRICT response integrity. The server is our own trusted
+  // boundary: it has already validated and deduplicated tags against these same
+  // reviews, so every tag it returns must pass the client's identical checks.
+  // If ANY tag is rejected or is a duplicate, that is not ordinary model noise
+  // (the server already filtered that) — it signals a server/client version
+  // mismatch, a programming defect, or a tampered response. Fail the whole
+  // request rather than silently dropping entries and rendering a partial report.
+  //
+  // This is intentionally stricter than the server's own gate, which is lenient
+  // toward the *untrusted* model: it keeps valid tags, discards bad ones, and
+  // fails only when they are ALL rejected. An empty `tags` array (no entries)
+  // is the legitimate "no themes" signal and is allowed to produce an empty
+  // result under both gates.
   const reviewsById = new Map(matched.map((r) => [r.id, r.text] as const));
-  const { valid } = validateTags(rawTags, reviewsById);
-
-  // All-rejected gate (defense-in-depth, symmetric with the server): if the
-  // endpoint returned tags but none survive re-validation, the response failed
-  // validation entirely — surface a controlled failure rather than an
-  // apparently-successful empty report. An empty `tags` array is the legitimate
-  // "no themes" signal and is allowed to produce an empty result.
-  if (rawTags.length > 0 && valid.length === 0) {
-    throw new AnalysisError("The analysis engine returned no usable results. Please try again.");
+  const { valid, rejected, deduped } = validateTags(rawTags, reviewsById);
+  if (rejected > 0 || deduped > 0) {
+    throw new AnalysisError("The analysis service returned an invalid response. Please try again.");
   }
 
   return tagsToResult(input, product, matched, valid);
