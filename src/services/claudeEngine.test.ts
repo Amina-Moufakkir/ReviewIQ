@@ -92,7 +92,7 @@ describe("analyzeWithClaude — failures never fall back to the heuristic engine
 });
 
 describe("analyzeWithClaude — defensive re-validation (second gate)", () => {
-  it("discards malformed tags so they never surface as findings", async () => {
+  it("throws when tags were returned but NONE survive validation (all-rejected gate)", async () => {
     mockFetch(() =>
       jsonResponse({
         tags: [
@@ -102,8 +102,43 @@ describe("analyzeWithClaude — defensive re-validation (second gate)", () => {
         ],
       }),
     );
+    // Every entry is invalid (unknown id / bad sentiment / bad evidence). This is
+    // a failed provider response, not an empty result → controlled failure.
+    await expect(analyzeWithClaude(INPUT, DATASET)).rejects.toBeInstanceOf(AnalysisError);
+  });
+
+  it("still discards SOME invalid tags while keeping the valid ones", async () => {
+    mockFetch(() =>
+      jsonResponse({
+        tags: [
+          { review_id: "r1", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable to wear" },
+          { review_id: "r2", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable for long days" },
+          { review_id: "ghost", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable to wear" }, // invalid
+        ],
+      }),
+    );
     const result = await analyzeWithClaude(INPUT, DATASET);
-    // All three entries are invalid (unknown id / bad sentiment / bad evidence).
+    // Two valid Comfort mentions survive → a finding; the invalid one is dropped.
+    expect(result.praise.find((f) => f.label === "Comfort")?.mentions).toBe(2);
+  });
+
+  it("treats a genuinely empty tag array as a legitimate empty result (no throw)", async () => {
+    mockFetch(() => jsonResponse({ tags: [] }));
+    const result = await analyzeWithClaude(INPUT, DATASET);
+    expect(result.reviewCount).toBe(3); // reviews were analyzed; Claude found no themes
+    expect(result.praise).toHaveLength(0);
+    expect(result.faults).toHaveLength(0);
+  });
+
+  it("treats valid-but-below-threshold tags as a legitimate empty result (no throw)", async () => {
+    mockFetch(() =>
+      jsonResponse({
+        // One valid Comfort mention — below MIN_EVIDENCE, so no finding, but the
+        // tag is valid, so this is NOT the all-rejected failure case.
+        tags: [{ review_id: "r1", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable to wear" }],
+      }),
+    );
+    const result = await analyzeWithClaude(INPUT, DATASET);
     expect(result.praise).toHaveLength(0);
     expect(result.faults).toHaveLength(0);
   });

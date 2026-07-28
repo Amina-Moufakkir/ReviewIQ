@@ -116,6 +116,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return sendError(res, 502, "analysis_failed", "The analysis engine returned an unreadable result.");
     }
 
+    // All-rejected gate: the model returned tags but NONE survived validation
+    // (fabricated review ids, non-verbatim evidence, bad sentiment). That is a
+    // provider-response failure, not a "no themes" result — surface a controlled
+    // error rather than an apparently-successful empty payload. A genuinely
+    // empty array (rejected === 0) is left to produce an empty result.
+    if (outcome.valid.length === 0 && outcome.rejected > 0) {
+      log(requestId, reviews.length, 502, startedAt, `all_rejected rejected=${outcome.rejected}`);
+      return sendError(res, 502, "analysis_failed", "The analysis engine returned no usable results. Please try again.");
+    }
+
     log(requestId, reviews.length, 200, startedAt, `ok valid=${outcome.valid.length} rejected=${outcome.rejected} deduped=${outcome.deduped}`);
     res.status(200).json({ tags: outcome.valid.map(toRawTag) });
   } catch (err) {

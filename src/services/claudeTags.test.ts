@@ -129,4 +129,17 @@ describe("parseTagArray / stripCodeFence / validateModelResponse", () => {
   it("treats invalid JSON as entirely unusable (throws)", () => {
     expect(() => validateModelResponse("garbage, not json", REVIEWS)).toThrow();
   });
+
+  it("reports valid=0, rejected>0 when every entry is invalid (all-rejected signal)", () => {
+    // The server's all-rejected gate keys off exactly this: entries present,
+    // none valid. Unknown id, bad sentiment, and non-matching evidence.
+    const raw = JSON.stringify([
+      tag({ review_id: "ghost" }),
+      tag({ sentiment: "positive" }),
+      tag({ evidence_span: "not in any review" }),
+    ]);
+    const { valid, rejected } = validateModelResponse(raw, REVIEWS);
+    expect(valid).toHaveLength(0);
+    expect(rejected).toBe(3);
+  });
 });
