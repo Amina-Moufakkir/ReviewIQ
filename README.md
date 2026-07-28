@@ -1,6 +1,8 @@
 # ReviewIQ
 
-**Live demo → https://amina-moufakkir.github.io/ReviewIQ/**
+**Live demo (GitHub Pages, heuristic) → https://amina-moufakkir.github.io/ReviewIQ/**
+
+**Vercel (same-origin app + `/api`) → https://reviewiq-six.vercel.app/**
 
 ReviewIQ helps E-commerce Analysts quickly understand customer feedback by turning product reviews into a concise, evidence-backed sentiment brief.
 
@@ -202,8 +204,10 @@ API itself is billed to your Anthropic account regardless of tier.
 - **GitHub Pages** — the existing deploy, **heuristic-only** demo. It never sets
   `VITE_ANALYSIS_ENGINE`, so it ships the heuristic engine and never calls
   `/api/analyze`. Unaffected by any of the above.
-- **Vercel** — the **full app** with the Claude engine (`VITE_ANALYSIS_ENGINE=claude`
-  + `ANTHROPIC_API_KEY`), frontend and function on one origin.
+- **Vercel** — https://reviewiq-six.vercel.app/ — the frontend and the `/api/analyze`
+  function on one origin. The engine is env-controlled: it runs the heuristic engine
+  by default and switches to the Claude engine when `VITE_ANALYSIS_ENGINE=claude` +
+  `ANTHROPIC_API_KEY` are set. *(Currently deployed in heuristic mode.)*
 
 ## Tech
 
