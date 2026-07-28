@@ -179,14 +179,21 @@ function extractQuote(review: Review, keywords: string[]): string {
   return (hit ?? review.text).trim();
 }
 
-/** Attribution for a quote — named author if present, else an anonymous label. */
-function attribution(review: Review): string {
+/**
+ * Attribution for a quote — named author if present, else an anonymous label.
+ * Exported so the Claude engine can attribute evidence spans the same way.
+ */
+export function attribution(review: Review): string {
   if (review.author) return review.author;
   const who = review.verifiedPurchase ? "Verified buyer" : "Buyer";
   return review.country ? `${who} · ${review.country}` : who;
 }
 
-function buildSummary(
+/**
+ * Compose the one-line brief from the findings. Exported so the Claude engine
+ * produces an identically-shaped summary from its own findings.
+ */
+export function buildSummary(
   product: Product,
   reviewCount: number,
   averageRating: number,

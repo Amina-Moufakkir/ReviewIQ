@@ -68,12 +68,18 @@ parsed in the browser — no reviews are uploaded to a server.
 - Summaries are generated from the review data by this engine — they are
   **not** AI-generated.
 
-### Prepared for a future model
+### Two engines behind one boundary
 
 The UI talks to the analysis through a single async boundary,
-`analyzeReviews()` in `src/services/analyzeReviews.ts`. Swapping the heuristic
-engine for a real classifier or model (e.g. the Claude API) means changing only
-that function — the `AnalysisResult` contract and the entire UI stay the same.
+`analyzeReviews()` in `src/services/analyzeReviews.ts`. There are now **two**
+engines behind it, selected by build-time config (`VITE_ANALYSIS_ENGINE`), with
+no UI toggle:
+
+- **`heuristic`** (default) — the deterministic engine described above.
+- **`claude`** — a Claude-powered **semantic tagging** engine (see below).
+
+Both return the same `AnalysisResult`, so the entire UI is unchanged. See
+[Claude engine & Vercel deployment](#claude-engine--vercel-deployment).
 
 ## Sample dataset (for CSV-upload development)
 
@@ -109,9 +115,99 @@ complaint spike in a specific date range.
 > only for product testing and CSV-upload development, and must not be presented
 > as, or mistaken for, genuine customer data.
 
+## Claude engine & Vercel deployment
+
+The optional **Claude engine** uses the Claude API as a *semantic tagging layer*
+(not a report generator). For the filtered reviews (selected product + date
+range) it identifies specific themes from the language, clusters equivalent
+descriptions under one canonical label, and assigns sentiment per theme mention
+with the exact supporting text span. **All counts, percentages, thresholds, and
+the summary are still computed in TypeScript** — the model judges language, code
+computes evidence. Star ratings are passed only as context and never determine
+sentiment.
+
+### Architecture (same-origin, key stays server-side)
+
+- **Server function:** [`api/analyze.ts`](api/analyze.ts) is a Vercel serverless
+  function. The browser calls it at the relative, same-origin path
+  **`/api/analyze`** (so there is no CORS to configure). It receives the filtered
+  reviews, calls Claude, validates the response, and returns **only** the
+  validated tag payload or a controlled error — never raw provider output.
+- **Client engine:** [`src/services/claudeEngine.ts`](src/services/claudeEngine.ts)
+  posts to `/api/analyze` and **defensively re-validates** the response before
+  building an `AnalysisResult` (two gates: server and client).
+- The **`ANTHROPIC_API_KEY` never reaches the browser.** It is read only via
+  `process.env` inside the function, is never prefixed `VITE_`, and is never
+  committed. A Claude failure surfaces through the normal error UI and **never**
+  silently falls back to the heuristic engine.
+- **Limits (server-enforced):** at most **100 reviews** and ~**250 KB** request
+  body per request, plus a post-parse review-text budget; over-limit returns a
+  controlled `413` (never truncated). Model default is `claude-opus-4-8`
+  (override with `ANTHROPIC_MODEL`); the Claude call has a ~30s timeout.
+
+### Local development (`vercel dev`)
+
+`npm run dev` (plain Vite) does **not** serve `/api` and does not load the Vercel
+environment — use it only for the heuristic engine. For anything touching the
+Claude engine, use the Vercel CLI's linked-project workflow:
+
+```bash
+npm i -g vercel          # once
+vercel link              # link this dir to the Vercel project (creates .vercel/, gitignored)
+vercel dev               # runs the frontend + /api together, loads Dev env vars
+```
+
+To exercise the Claude engine locally, run with `VITE_ANALYSIS_ENGINE=claude`,
+e.g. `VITE_ANALYSIS_ENGINE=claude vercel dev`.
+
+**Where the key must live for `vercel dev`:** the `/api/analyze` **function**
+reads `ANTHROPIC_API_KEY` from Vercel's **Development**-scoped environment
+variables — set it there (`vercel env add ANTHROPIC_API_KEY development`) and
+`vercel dev` injects it into the function automatically. Note that a local
+`.env.local` file feeds the **frontend/build** but is **not** injected into the
+function runtime; if your key only lives in `.env.local`, load it into the shell
+first (`set -a; . ./.env.local; set +a; vercel dev`) or the function will return
+the controlled `500 server_misconfigured`.
+
+### Production secret configuration
+
+In the Vercel dashboard → **Settings → Environment Variables**, add
+`ANTHROPIC_API_KEY` (mark it **Sensitive**) scoped to **Production**,
+**Preview**, and **Development** (Development is what `vercel dev` loads). Also
+set `VITE_ANALYSIS_ENGINE=claude` for the Vercel deployment. Copy
+[`.env.example`](.env.example) if you keep a local file — it lists only
+`ANTHROPIC_API_KEY=` and local `.env*` files are gitignored. **After changing the
+production secret, redeploy before testing.**
+
+### Deploy to Vercel
+
+Vercel auto-detects Vite (build `npm run build`, output `dist/`) and auto-deploys
+any function under `api/`. Push the branch (or `vercel --prod`) and Vercel builds
+the frontend and the function together on the same origin. On Vercel the app is
+served at the domain root — `vite.config.ts` sets `base` to `/` automatically
+when `VERCEL` is set (and to `/ReviewIQ/` otherwise for GitHub Pages).
+
+### Cost / free-tier notes
+
+Every Claude analysis is one API call over the filtered reviews; input+output
+scale with review count (bounded by the 100-review cap). At the default
+`claude-opus-4-8`, a large (~100-review) request is roughly on the order of a few
+US cents; set `ANTHROPIC_MODEL=claude-haiku-4-5` to cut that substantially. On
+Vercel's **Hobby** (free) tier, serverless functions are subject to
+execution-time and monthly-invocation limits — fine for a demo, but the Claude
+API itself is billed to your Anthropic account regardless of tier.
+
+### How the two deployments coexist
+
+- **GitHub Pages** — the existing deploy, **heuristic-only** demo. It never sets
+  `VITE_ANALYSIS_ENGINE`, so it ships the heuristic engine and never calls
+  `/api/analyze`. Unaffected by any of the above.
+- **Vercel** — the **full app** with the Claude engine (`VITE_ANALYSIS_ENGINE=claude`
+  + `ANTHROPIC_API_KEY`), frontend and function on one origin.
+
 ## Tech
 
-React · TypeScript · Vite · Tailwind CSS · Vitest
+React · TypeScript · Vite · Tailwind CSS · Vitest · Vercel Functions · Claude API
 
 ## Scripts
 

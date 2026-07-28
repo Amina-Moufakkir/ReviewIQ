@@ -32,3 +32,6 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+
+# Vercel (linked-project config + local secrets)
+.vercel/
