@@ -68,6 +68,15 @@ export async function analyzeWithClaude(
   const reviewsById = new Map(matched.map((r) => [r.id, r.text] as const));
   const { valid } = validateTags(rawTags, reviewsById);
 
+  // All-rejected gate (defense-in-depth, symmetric with the server): if the
+  // endpoint returned tags but none survive re-validation, the response failed
+  // validation entirely — surface a controlled failure rather than an
+  // apparently-successful empty report. An empty `tags` array is the legitimate
+  // "no themes" signal and is allowed to produce an empty result.
+  if (rawTags.length > 0 && valid.length === 0) {
+    throw new AnalysisError("The analysis engine returned no usable results. Please try again.");
+  }
+
   return tagsToResult(input, product, matched, valid);
 }
 
