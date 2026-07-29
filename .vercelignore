@@ -1,0 +1,13 @@
+# Amazon dataset — supplied locally, never deployed.
+#
+# .gitignore does not protect these: `vercel deploy` uploads the local working
+# directory, not the git tree, so without this file Vite copies
+# public/amazon-products.csv into dist/ and the deployment serves the real
+# dataset publicly. The source's redistribution terms have not been verified,
+# and src/amazon.csv additionally holds real reviewer ids and names.
+#
+# Excluding it is what makes the deployed build fall back to the committed
+# synthetic public/amazon-demo.csv, which is the documented behavior.
+# See "Amazon dataset" in README.md.
+src/amazon.csv
+public/amazon-products.csv
