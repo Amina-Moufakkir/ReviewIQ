@@ -33,7 +33,8 @@ Customer insights are buried in thousands of reviews. Analysts spend hours readi
 The core MVP is complete. An analyst can:
 
 - Use the **real Amazon product dataset** (the default), the built-in sample,
-  **upload a CSV**, or load the bundled 204-review sample
+  load the bundled 204-review sample, or **upload a CSV** — either a ReviewIQ
+  review CSV or a raw Amazon product export, recognized by its header
 - Select a product
 - Select a date range (for datasets that carry review dates)
 - Run the analysis
@@ -53,13 +54,18 @@ product.
 ReviewIQ deliberately supports two kinds of row, and names them differently
 rather than forcing one vocabulary over both:
 
-- **Review datasets** (the built-in sample, the 204-review sample, uploaded
-  CSVs) are analyzed **review-by-review**: one row is one customer's review,
-  with that customer's own star rating and, usually, a date.
-- **Amazon datasets** are analyzed **record-by-record**: one row is a product
-  listing that already aggregates many customers — a product-average rating and
-  roughly eight customers' review text concatenated into a single cell, with no
-  date anywhere in the source.
+- **Review datasets** (the built-in sample, the 204-review sample, an uploaded
+  review CSV) are analyzed **review-by-review**: one row is one customer's
+  review, with that customer's own star rating and, usually, a date.
+- **Amazon datasets** (the bundled dataset, or an uploaded Amazon export) are
+  analyzed **record-by-record**: one row is a product listing that already
+  aggregates many customers — a product-average rating and roughly eight
+  customers' review text concatenated into a single cell, with no date anywhere
+  in the source.
+
+Either model can arrive by upload: the [CSV upload](#csv-upload) control reads
+the file's header and routes it to the matching loader, so the model follows the
+data rather than the button it came through.
 
 The distinction is load-bearing, not cosmetic. It decides the noun the UI uses
 ("1,464 product records", never "1,464 reviews"), whether the date window is
@@ -70,11 +76,43 @@ for what this costs analytically.
 
 ## CSV upload
 
-Upload a CSV of reviews and ReviewIQ analyzes it in place — no backend. Required
-columns: `review_id`, `product_id`, `product_name`, `category`, `rating` (1–5),
+Upload a CSV and ReviewIQ analyzes it in place — no backend, nothing sent to a
+server. **One control accepts both supported shapes**, and the file's own header
+decides how it is read:
+
+| Your file's header carries | It loads as | One row is |
+| --- | --- | --- |
+| `review_id`, `product_id`, `product_name`, `category`, `rating`, `review_text` | a **ReviewIQ review CSV** | one customer's review |
+| `product_id`, `product_name`, `category`, `rating`, `review_content` | an **Amazon product export** | one product record |
+
+So a raw Amazon export — the 16-column source file, unmodified — can be dropped
+straight into the upload control, and it loads exactly as the bundled Amazon
+dataset does: product records, undated, counted and worded as records
+(1,465 parsed → 1,464 accepted → 1,350 products, for the full source file).
+There is no separate Amazon upload button, and no need to run
+`npm run build:amazon` first — that script exists to make the dataset the app's
+*default* source, not to make it uploadable.
+
+Detection reads column names only — no value sniffing, no filename heuristics —
+so two files with the same header always load the same way. A file that carries
+both `review_text` and `review_content` is read as the ReviewIQ shape, which
+keeps per-customer rows per-customer. A file matching neither is rejected with a
+message naming what each shape is missing, rather than a guess:
+
+> This CSV matches neither supported format. As a ReviewIQ review CSV it is
+> missing review_id, review_text; as an Amazon product export it is missing
+> review_content.
+
+Both routes converge on the same loader, so validation, skip reasons and the
+parsed/accepted/skipped accounting are identical either way
+(`src/lib/loadUploadedCsv.ts`).
+
+### Review-CSV columns
+
+Required: `review_id`, `product_id`, `product_name`, `category`, `rating` (1–5),
 `review_text`. Optional: `review_date`, `review_title`, `verified_purchase`,
-`country`, `promotion`, `discount_percent`. See [`public/sample-reviews.csv`](public/sample-reviews.csv)
-for the exact format.
+`country`, `promotion`, `discount_percent`. See
+[`public/sample-reviews.csv`](public/sample-reviews.csv) for the exact format.
 
 `review_date` is the one optional column that changes how the dataset behaves:
 
@@ -86,8 +124,13 @@ for the exact format.
   for the chosen product. This is how the Amazon dataset loads.
 
 Rows with an out-of-range rating or a duplicate id are skipped and counted
-either way. Everything is parsed in the browser — no reviews are uploaded to a
-server.
+either way.
+
+Parsing is entirely in the browser: the file itself is never uploaded anywhere,
+under either engine. The heuristic engine then analyzes it in the browser too,
+so nothing leaves the page at all. The Claude engine sends the **filtered**
+reviews — the selected product, and the date window when the data has one — to
+`/api/analyze`; see [Security model](#security-model).
 
 ## How the analysis works
 
@@ -373,6 +416,11 @@ The CSV is never hand-edited — re-run the script instead. It is a physical
 projection only: it drops columns and copies every cell it keeps verbatim, so
 all normalization and interpretation stay in the runtime adapter. The fixture is
 served from `public/` and fetched at runtime, so it adds nothing to the JS bundle.
+
+Step 2 is what makes the dataset the app's **default** source. To simply look at
+the data, it is optional: the downloaded `src/amazon.csv` can be uploaded
+through [CSV upload](#csv-upload) as-is, and loads through the same adapter with
+the same accounting. Generate the fixture when you want it on load, every load.
 
 **Without the real dataset**, the app falls back to `public/amazon-demo.csv`
 automatically — nothing to configure, and the built-in sample and CSV upload keep
