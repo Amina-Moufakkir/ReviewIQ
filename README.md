@@ -4,6 +4,11 @@
 
 **Vercel (same-origin app + `/api`) → https://reviewiq-six.vercel.app/**
 
+> The public demo uses a small **synthetic Amazon-style dataset**, so the full
+> integration can be explored without redistributing the original data. Local
+> developers can download the real dataset and run `npm run build:amazon` to
+> replace it. See [Getting the dataset](#getting-the-dataset).
+
 ReviewIQ helps E-commerce Analysts quickly understand customer feedback by turning product reviews into a concise, evidence-backed sentiment brief.
 
 ## Problem
@@ -25,19 +30,31 @@ The core MVP is complete. An analyst can:
   how promoted purchases compare with full-price ones on average rating
 
 Every insight — findings, mention counts, percentages, representative quotes,
-and the summary — is derived only from the reviews inside the selected product
-and date range.
+and the summary — is derived only from the rows inside the selected product
+and, where the data carries review dates, the selected date range. The Amazon
+dataset has no dates, so a run there covers every product record for the chosen
+product.
 
 ## CSV upload
 
 Upload a CSV of reviews and ReviewIQ analyzes it in place — no backend. Required
-columns: `review_id`, `product_id`, `product_name`, `category`, `review_date`
-(`YYYY-MM-DD`), `rating` (1–5), `review_text`. Optional: `review_title`,
-`verified_purchase`, `country`, `promotion`, `discount_percent`. See [`public/sample-reviews.csv`](public/sample-reviews.csv)
-for the exact format. Rows with a **strictly-invalid calendar date** (e.g.
-`2026-02-30`, `2026-13-01`), an out-of-range rating, or a duplicate id are
-skipped and counted; the date range auto-fits the uploaded data. Everything is
-parsed in the browser — no reviews are uploaded to a server.
+columns: `review_id`, `product_id`, `product_name`, `category`, `rating` (1–5),
+`review_text`. Optional: `review_date`, `review_title`, `verified_purchase`,
+`country`, `promotion`, `discount_percent`. See [`public/sample-reviews.csv`](public/sample-reviews.csv)
+for the exact format.
+
+`review_date` is the one optional column that changes how the dataset behaves:
+
+- **Present** — every row must hold a valid calendar date (`YYYY-MM-DD`). Rows
+  with a **strictly-invalid** one (e.g. `2026-02-30`, `2026-13-01`, or a blank
+  cell) are skipped and counted, and the date range auto-fits the data.
+- **Absent** — the file is treated as **undated**. Every row loads with no date
+  and the date window is hidden rather than shown empty; a run covers every row
+  for the chosen product. This is how the Amazon dataset loads.
+
+Rows with an out-of-range rating or a duplicate id are skipped and counted
+either way. Everything is parsed in the browser — no reviews are uploaded to a
+server.
 
 ## How the analysis works
 
@@ -47,9 +64,9 @@ ReviewIQ has **two analysis engines** behind a single async boundary,
 the engine that produces the tags changes. Selection is by configuration
 (`VITE_ANALYSIS_ENGINE`), not a user-facing toggle.
 
-No backend, database, or accounts are required for either engine's data: reviews
-come from the built-in sample or a CSV you provide, and are parsed entirely in
-the browser.
+No backend, database, or accounts are required for either engine's data: rows
+come from the Amazon fixture, the built-in sample, or a CSV you provide, and are
+parsed entirely in the browser.
 
 ### Engine 1 — Heuristic (default, no backend, fully static)
 
@@ -67,8 +84,9 @@ that runs entirely in the browser with no API calls. It:
   when the reviews carry promotion data — comparing promoted vs full-price
   purchases on average rating; datasets without it simply omit the section.
 
-Each finding's percentage is that theme's supporting reviews as a share of the
-reviews in the selected product and window ("N of M selected reviews · P%").
+Each finding's percentage is that theme's supporting rows as a share of the rows
+in the selected product and window ("N of M selected reviews · P%", or "product
+records" for undated product-level data such as the Amazon dataset).
 Because it needs no server, this engine powers the static **GitHub Pages demo**,
 and it is deterministic — the same input always produces the same output.
 
@@ -123,11 +141,29 @@ real Amazon product listings. It is fetched at runtime from
 by the same loader as any uploaded CSV, and adapted by
 `src/lib/amazonAdapter.ts`.
 
-> **The dataset is not committed to this repository — you supply it locally.**
-> Its license and redistribution terms have not been verified, so nothing
-> derived from it is published here. See [Getting the dataset](#getting-the-dataset)
-> below. Without it the app starts, says so, and offers the built-in sample; the
-> dataset-specific tests skip rather than fail.
+> **The real dataset is not committed to this repository — you supply it
+> locally.** Its license and redistribution terms have not been verified, so
+> nothing derived from it is published here. See
+> [Getting the dataset](#getting-the-dataset) below.
+
+**The Amazon source resolves in this order:**
+
+1. `public/amazon-products.csv` — the real dataset, generated locally by
+   `npm run build:amazon`.
+2. `public/amazon-demo.csv` — a committed, fully **synthetic** stand-in in the
+   same column shape. This is what deployed builds get.
+
+The fallback is deliberately to synthetic *Amazon-shaped* data and never to the
+ordinary review sample: someone exploring the Amazon path should actually be
+exercising the Amazon adapter, not a different dataset wearing its name. The
+label reads "Amazon demo records (synthetic)" and the app states in place that
+the records are invented, so the two can never be confused. The built-in sample
+and CSV upload remain separately selectable either way.
+
+Everything the integration does stays visible on the demo data: the adapter
+runs, records are undated, the wording says *product records*, the long-title
+selector shortening applies, and the parsed/accepted/skipped accounting has real
+skips to show.
 
 ### What one row actually is
 
@@ -144,7 +180,7 @@ it never labels them "reviews".
 | Parsed records | 1,465 |
 | Accepted | 1,464 |
 | Skipped | 1 (`invalid_rating` — one row whose `rating` cell is `\|`) |
-| Products derived | 1,350 distinct `product_id`s |
+| Products derived | 1,350 — from 1,351 distinct `product_id`s; the skipped row was the only one for its product |
 
 `accepted + skipped = parsed` always holds, every skip is attributed to a
 reason, and both numbers are shown in the app. No row is discarded silently.
@@ -208,9 +244,15 @@ gitignored and supplied locally:
 | Path | What it is | Committed? |
 | --- | --- | --- |
 | `src/amazon.csv` | raw source, 16 columns, ~4.5 MB — **you download this** | no |
-| `public/amazon-products.csv` | generated, 9 columns, ~2.3 MB — what the app fetches | no |
+| `public/amazon-products.csv` | generated, 9 columns, ~2.3 MB — preferred at runtime | no |
 | `scripts/build-amazon-csv.mjs` | the deterministic generator | **yes** |
-| `src/test/fixtures/amazon-mini.csv` | 12-record synthetic stand-in | **yes** |
+| `public/amazon-demo.csv` | 28-row synthetic dataset — what deployed builds serve | **yes** |
+| `src/test/fixtures/amazon-mini.csv` | 12-row synthetic fixture — tests only | **yes** |
+
+The two synthetic files are invented in the same style but serve different
+purposes and are edited independently: `amazon-demo.csv` supports the deployed
+product, `amazon-mini.csv` supports the tests. Application code never imports
+from `src/test/fixtures/` — that directory stays test-only.
 
 Two reasons nothing derived from the dataset is published here:
 
@@ -239,16 +281,13 @@ projection only: it drops columns and copies every cell it keeps verbatim, so
 all normalization and interpretation stay in the runtime adapter. The fixture is
 served from `public/` and fetched at runtime, so it adds nothing to the JS bundle.
 
-**Without the real dataset**, the app shows an explanatory message and the
-built-in sample and CSV upload keep working. To drive the Amazon code path
-anyway, use the committed synthetic fixture:
+**Without the real dataset**, the app falls back to `public/amazon-demo.csv`
+automatically — nothing to configure, and the built-in sample and CSV upload keep
+working alongside it. Deleting `public/amazon-products.csv` is enough to see
+exactly what a deployed build shows.
 
-```bash
-cp src/test/fixtures/amazon-mini.csv public/amazon-products.csv
-```
-
-See [`src/test/fixtures/README.md`](src/test/fixtures/README.md) for what that
-fixture deliberately contains.
+See [`src/test/fixtures/README.md`](src/test/fixtures/README.md) for what the
+test fixture deliberately contains.
 
 ## Sample dataset (for CSV-upload development)
 
@@ -287,8 +326,9 @@ complaint spike in a specific date range.
 ## Claude engine & Vercel deployment
 
 The optional **Claude engine** uses the Claude API as a *semantic tagging layer*
-(not a report generator). For the filtered reviews (selected product + date
-range) it identifies specific themes from the language, clusters equivalent
+(not a report generator). For the filtered reviews (selected product, plus the
+date range when the data has one) it identifies specific themes from the
+language, clusters equivalent
 descriptions under one canonical label, and assigns sentiment per theme mention
 with the exact supporting text span. **All counts, percentages, thresholds, and
 the summary are still computed in TypeScript** — the model judges language, code
@@ -409,14 +449,15 @@ React · TypeScript · Vite · Tailwind CSS · Vitest · Vercel Functions · Cla
 npm run dev             # start the dev server
 npm run typecheck       # tsc
 npm run lint            # eslint
-npm test                # vitest (engine, keyword matching, date validation, CSV parsing, Amazon adapter)
+npm test                # vitest (engines, CSV parsing, Amazon adapter, product labels, query-bound state)
 npm run build           # production build
 npm run build:amazon    # regenerate public/amazon-products.csv from src/amazon.csv
 ```
 
 ## Status
 
-✅ Core MVP complete — CSV upload + a deterministic heuristic engine, plus an
-optional Claude-powered semantic-tagging engine behind the same
-`analyzeReviews()` boundary (server-side key, controlled errors, identical UI
-and `AnalysisResult`). Engine chosen by `VITE_ANALYSIS_ENGINE`.
+✅ Core MVP complete — the real Amazon product dataset as the default source,
+CSV upload, and a deterministic heuristic engine, plus an optional
+Claude-powered semantic-tagging engine behind the same `analyzeReviews()`
+boundary (server-side key, controlled errors, identical UI and
+`AnalysisResult`). Engine chosen by `VITE_ANALYSIS_ENGINE`.
