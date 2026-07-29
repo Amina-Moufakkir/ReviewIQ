@@ -1,7 +1,6 @@
 import type { FormEvent } from "react";
 import type { Product, ReviewStats } from "../types";
-import { formatDate } from "../lib/date";
-import { formatCount, type DatasetUnit } from "../lib/datasetInfo";
+import { dateRangeSuffix, formatCount, type DatasetUnit } from "../lib/datasetInfo";
 import { ProductSelect } from "./ProductSelect";
 import { DateRangePicker } from "./DateRangePicker";
 
@@ -69,7 +68,7 @@ export function AnalyzeForm({
           {productStats.count > 0 ? (
             <p className="font-mono text-[11px] text-ink-soft">
               {formatCount(productStats.count, unit)}
-              {hasDates ? ` · ${formatDate(productStats.from)} – ${formatDate(productStats.to)}` : ""}
+              {dateRangeSuffix(productStats.from, productStats.to, hasDates)}
             </p>
           ) : null}
         </div>
