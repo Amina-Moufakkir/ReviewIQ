@@ -9,7 +9,20 @@
 > developers can download the real dataset and run `npm run build:amazon` to
 > replace it. See [Getting the dataset](#getting-the-dataset).
 
-ReviewIQ helps E-commerce Analysts quickly understand customer feedback by turning product reviews into a concise, evidence-backed sentiment brief.
+## In short
+
+ReviewIQ helps E-commerce Analysts understand customer feedback fast: it turns
+raw reviews into a structured product brief — what customers praise, what they
+fault, the recurring themes, and what to do next — with every claim backed by
+counts and a real quote from the selected rows.
+
+It runs **two interchangeable analysis engines** — a deterministic heuristic one
+and a Claude-powered semantic one — behind a single `analyzeReviews()` contract,
+over **three data sources**: a real Amazon product dataset, a synthetic review
+sample, and any CSV you upload. Those sources do not share a data model — an
+Amazon row is a product record, a sample row is one customer's review — so the
+engineering problem the project actually solves is holding one loader, one
+contract and one UI steady while the shape of the underlying data changes.
 
 ## Problem
 
@@ -34,6 +47,26 @@ and the summary — is derived only from the rows inside the selected product
 and, where the data carries review dates, the selected date range. The Amazon
 dataset has no dates, so a run there covers every product record for the chosen
 product.
+
+## Two data models, one contract
+
+ReviewIQ deliberately supports two kinds of row, and names them differently
+rather than forcing one vocabulary over both:
+
+- **Review datasets** (the built-in sample, the 204-review sample, uploaded
+  CSVs) are analyzed **review-by-review**: one row is one customer's review,
+  with that customer's own star rating and, usually, a date.
+- **Amazon datasets** are analyzed **record-by-record**: one row is a product
+  listing that already aggregates many customers — a product-average rating and
+  roughly eight customers' review text concatenated into a single cell, with no
+  date anywhere in the source.
+
+The distinction is load-bearing, not cosmetic. It decides the noun the UI uses
+("1,464 product records", never "1,464 reviews"), whether the date window is
+shown at all, and how much a percentage is really claiming. `unitFor()` in
+`src/lib/datasetInfo.ts` is the single place that decision is made; everything
+downstream reads it. See [What one row actually is](#what-one-row-actually-is)
+for what this costs analytically.
 
 ## CSV upload
 
@@ -63,6 +96,14 @@ ReviewIQ has **two analysis engines** behind a single async boundary,
 `AnalysisResult` contract are identical no matter which engine runs — only
 the engine that produces the tags changes. Selection is by configuration
 (`VITE_ANALYSIS_ENGINE`), not a user-facing toggle.
+
+The heuristic engine was built **first, on purpose**: it is explainable,
+testable, free to run, and deterministic, so the whole product — filtering,
+evidence, thresholds, quotes, UI — could be proven correct without a model in
+the loop. The Claude engine was added behind the same boundary afterwards.
+[Why the second engine exists](#why-the-second-engine-exists) is where the
+interesting part is: the Amazon dataset makes the difference between them
+measurable rather than theoretical.
 
 No backend, database, or accounts are required for either engine's data: rows
 come from the Amazon fixture, the built-in sample, or a CSV you provide, and are
@@ -106,6 +147,33 @@ rather than matching a fixed keyword list. It:
 So the summary sentence and every number are computed in code under **both**
 engines; what the Claude engine changes is *how themes and per-mention sentiment
 are detected* (language understanding vs. a fixed keyword list + star rating).
+
+### Why the second engine exists
+
+On ordinary review data the two engines are close: one row is one customer with
+one opinion and one star rating, so deriving sentiment from the rating is a
+reasonable approximation and the heuristic engine produces a useful brief.
+
+The Amazon dataset is where that approximation breaks, and it breaks
+*measurably*. Each row's rating is a product **average** over thousands of
+customers, so it regresses toward the middle: across the 1,464 accepted records,
+1,422 round to ≥ 4 and exactly **2** round to ≤ 2. The heuristic engine reads
+sentiment from that number, so it has almost no fault evidence to find — the
+"what they fault" column comes back near-empty not because the products have no
+problems, but because averaging destroyed the signal the engine depends on. The
+complaints are still there, in the text, in the same rows.
+
+The Claude engine reads that text, and assigns sentiment per theme *mention*
+rather than per row, so a record whose rounded rating says 4 can still yield a
+fault. **The dataset itself is the argument for semantic analysis** — not a
+preference for models over rules, but a data shape a rating-based heuristic
+structurally cannot answer, whatever its keyword list. Swapping the source is
+what exposed it, which is precisely why both engines sit behind one contract.
+
+(The heuristic half of that comparison is measured — 1,422 vs 2 is counted
+directly from the accepted records. The Claude half is a property of how the
+engine assigns sentiment, verified end-to-end on review data; a fixed evaluation
+set on the Amazon data is the benchmark still deferred below.)
 
 ### Security model
 
@@ -180,7 +248,27 @@ it never labels them "reviews".
 | Parsed records | 1,465 |
 | Accepted | 1,464 |
 | Skipped | 1 (`invalid_rating` — one row whose `rating` cell is `\|`) |
-| Products derived | 1,350 — from 1,351 distinct `product_id`s; the skipped row was the only one for its product |
+| Products derived | 1,350 |
+
+The app shows the first three verbatim: *1,465 parsed · 1,464 accepted · 1
+skipped (invalid rating 1)*, above *Using Amazon product records · 1,464 product
+records · 1,350 products*.
+
+**Why 1,465 rows become 1,350 products.** Rows and products are not the same
+count, for two independent reasons:
+
+1. The 1,465 parsed rows carry **1,351 distinct `product_id`s**. 92 of those ids
+   appear on more than one row, with differing prices, rating counts and text.
+   Rows are never deduplicated; a product is derived from the **first** accepted
+   row per id, so repeated ids collapse to one product each.
+2. One row is skipped (`rating` cell is `|`). Its `product_id` appears on **no
+   other row**, so that id is lost with it — leaving **1,350 distinct ids across
+   the 1,464 accepted rows**, and therefore 1,350 products.
+
+So: 1,351 distinct ids − 1 id whose only row was invalid = 1,350 products; the
+92 repeated ids explain the gap between 1,464 accepted rows and 1,350 products,
+not the 1,351/1,350 difference. (The 92 figure is the same before and after the
+skip.)
 
 `accepted + skipped = parsed` always holds, every skip is attributed to a
 reason, and both numbers are shown in the app. No row is discarded silently.
@@ -216,7 +304,8 @@ as here, because technical compatibility is not analytical validity.
   records versus 2 — an artifact of averaging thousands of customers into one
   number, not a finding about the products. Expect a near-empty "what they
   fault" column and few recommendations from the heuristic engine. The Claude
-  engine reads the text instead and does surface faults.
+  engine reads the text instead and does surface faults — see
+  [Why the second engine exists](#why-the-second-engine-exists).
 - **No dates.** The dataset has no date field of any kind. No date is invented,
   derived, or substituted — records are undated (`date: ""`), and the date
   window is hidden rather than shown empty or pre-filled.
@@ -229,7 +318,10 @@ as here, because technical compatibility is not analytical validity.
   mid-text.
 - **Repeated products.** 92 `product_id`s appear on more than one row, with
   differing prices, counts and text. Rows are not deduplicated; products are
-  derived from the first row per id.
+  derived from the first accepted row per id, so a product's *name* and
+  *category* come from one listing while its records span all of them. See
+  [Load accounting](#load-accounting) for how this produces 1,350 products from
+  1,464 records.
 - **Currency is ₹ (INR).** Prices are Indian rupees; nothing in the app presents
   them as any other currency.
 - **No promotion insight.** `discount_percentage` is a *listing* discount, not a
@@ -246,7 +338,7 @@ gitignored and supplied locally:
 | `src/amazon.csv` | raw source, 16 columns, ~4.5 MB — **you download this** | no |
 | `public/amazon-products.csv` | generated, 9 columns, ~2.3 MB — preferred at runtime | no |
 | `scripts/build-amazon-csv.mjs` | the deterministic generator | **yes** |
-| `public/amazon-demo.csv` | 28-row synthetic dataset — what deployed builds serve | **yes** |
+| `public/amazon-demo.csv` | 29-row synthetic dataset (25 accepted, 4 deliberate skips → 24 products) — what deployed builds serve | **yes** |
 | `src/test/fixtures/amazon-mini.csv` | 12-row synthetic fixture — tests only | **yes** |
 
 The two synthetic files are invented in the same style but serve different
@@ -261,8 +353,9 @@ Two reasons nothing derived from the dataset is published here:
    for this repository, so it is not redistributed. Once the license explicitly
    permits redistribution, the generated fixture can be committed with the
    attribution its terms require — nothing else in the setup needs to change.
-2. **Personal data.** The raw file's `user_id` and `user_name` columns hold
-   9,269 real reviewer identities. The generator drops them (along with unused
+2. **Personal data.** The raw file's `user_id` and `user_name` columns are
+   comma-joined lists holding 11,503 identity tokens — **9,050 distinct
+   reviewer ids** (and 7,698 distinct names). The generator drops them (along with unused
    bulk: `about_product`, `img_link`, `product_link`, `review_id`,
    `review_title`), so the generated fixture carries no personal identifiers —
    but it is still derived from the source, so rule 1 governs it too.
