@@ -10,7 +10,12 @@ export class CsvError extends Error {
   }
 }
 
-const REQUIRED_COLUMNS = [
+/**
+ * Columns a canonical ReviewIQ CSV must carry. Exported so the upload boundary
+ * can recognize the shape from the header using the same list the loader
+ * enforces.
+ */
+export const REQUIRED_COLUMNS = [
   "review_id",
   "product_id",
   "product_name",

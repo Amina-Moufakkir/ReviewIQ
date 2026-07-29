@@ -44,8 +44,18 @@ import { buildDataset, CsvError, type LoadStats, type SkipReason } from "./parse
  * produces undated reviews (`date: ""`) and the UI hides the date window.
  */
 
-/** Amazon columns the adapter cannot work without. */
-const REQUIRED_SOURCE_COLUMNS = ["product_id", "product_name", "category", "rating", "review_content"] as const;
+/**
+ * Amazon columns the adapter cannot work without. Exported so the upload
+ * boundary can recognize an Amazon-shaped file by its header alone, using the
+ * same list the adapter enforces — one definition, no second opinion.
+ */
+export const REQUIRED_SOURCE_COLUMNS = [
+  "product_id",
+  "product_name",
+  "category",
+  "rating",
+  "review_content",
+] as const;
 
 /** Canonical loader columns the adapter emits. Deliberately has no review_date. */
 const CANONICAL_COLUMNS = ["review_id", "product_id", "product_name", "category", "rating", "review_text"] as const;
@@ -111,7 +121,15 @@ export interface AmazonAdapterResult {
  * nothing valid left) — the same failure contract as an uploaded CSV.
  */
 export function adaptAmazonCsv(text: string, label: string): AmazonAdapterResult {
-  const rows = parseCsv(text);
+  return adaptAmazonRows(parseCsv(text), label);
+}
+
+/**
+ * The adapter proper, over rows a caller has already parsed. The upload
+ * boundary reads the header to choose a route, so it parses first and calls
+ * this — the file is never parsed twice, and there is still only one adapter.
+ */
+export function adaptAmazonRows(rows: string[][], label: string): AmazonAdapterResult {
   if (rows.length === 0) throw new CsvError("The file is empty.");
 
   const columns = readColumns(rows[0]!);
