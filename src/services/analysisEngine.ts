@@ -2,6 +2,7 @@ import type { AnalysisInput, AnalysisResult, Finding, Product, Review, ReviewSta
 import { THEME_LIBRARY, type ThemeDef } from "./themeLibrary";
 import { matchesKeyword } from "../lib/matchKeyword";
 import { analyzePromotions } from "./promotionAnalysis";
+import { REVIEW, type DatasetUnit } from "../lib/datasetInfo";
 
 /**
  * Pure, synchronous analysis engine. No React, no I/O, no latency — so it is
@@ -63,7 +64,12 @@ export function reviewStatsFor(productId: string, reviews: Review[]): ReviewStat
 }
 
 /** Run the analysis for a product + date range against a set of reviews. */
-export function analyze(input: AnalysisInput, reviews: Review[], products: Product[]): AnalysisResult {
+export function analyze(
+  input: AnalysisInput,
+  reviews: Review[],
+  products: Product[],
+  unit: DatasetUnit = REVIEW,
+): AnalysisResult {
   const { productId, from, to } = input;
 
   const product = products.find((p) => p.id === productId);
@@ -111,7 +117,7 @@ export function analyze(input: AnalysisInput, reviews: Review[], products: Produ
     to,
     reviewCount,
     averageRating,
-    summary: buildSummary(product, reviewCount, averageRating, praise, faults),
+    summary: buildSummary(product, reviewCount, averageRating, praise, faults, unit),
     praise,
     faults,
     recommendations,
@@ -192,6 +198,13 @@ export function attribution(review: Review): string {
 /**
  * Compose the one-line brief from the findings. Exported so the Claude engine
  * produces an identically-shaped summary from its own findings.
+ *
+ * `unit` names what one analyzed row is, so the sentence can say "product
+ * record" where a row is a product listing rather than one customer's review.
+ * It is the same `DatasetUnit` the UI reads, so the two can never disagree, and
+ * it is deliberately a generic label: the engine still knows nothing about any
+ * particular dataset. It defaults to reviews, which is what an unqualified row
+ * is everywhere except a product-level source.
  */
 export function buildSummary(
   product: Product,
@@ -199,16 +212,17 @@ export function buildSummary(
   averageRating: number,
   praise: Finding[],
   faults: Finding[],
+  unit: DatasetUnit = REVIEW,
 ): string {
   if (reviewCount === 0) {
-    return `No reviews for ${product.name} fall in the selected window.`;
+    return `No ${unit.many} for ${product.name} fall in the selected window.`;
   }
 
   const rating = averageRating.toFixed(1);
   const base =
     reviewCount === 1
-      ? `Based on a single review of ${product.name} (rated ${rating}★), `
-      : `Across ${reviewCount} reviews of ${product.name} (averaging ${rating}★), `;
+      ? `Based on a single ${unit.one} of ${product.name} (rated ${rating}★), `
+      : `Across ${reviewCount} ${unit.many} of ${product.name} (averaging ${rating}★), `;
 
   const top = praise[0];
   const bottom = faults[0];
@@ -225,7 +239,7 @@ export function buildSummary(
   if (top && bottom) return `${base}${posClause}, while ${negClause}.`;
   if (top) return `${base}${posClause}. No recurring complaints have enough evidence in this window.`;
   if (bottom) return `${base}${negClause}. Little positive sentiment has enough evidence in this window.`;
-  return `${base}no themes reach the evidence threshold — individual reviews vary.`;
+  return `${base}no themes reach the evidence threshold — individual ${unit.many} vary.`;
 }
 
 function lowerFirst(s: string): string {

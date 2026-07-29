@@ -1,6 +1,7 @@
 import type { AnalysisInput, AnalysisResult, Finding, Product, Review, Sentiment } from "../types";
 import type { ValidatedTag } from "./claudeTags";
 import { MIN_EVIDENCE, attribution, buildSummary } from "./analysisEngine";
+import { REVIEW, type DatasetUnit } from "../lib/datasetInfo";
 
 /**
  * Build an `AnalysisResult` from validated Claude tags. All counts, percentages,
@@ -17,9 +18,10 @@ export function tagsToResult(
   product: Product,
   matched: Review[],
   tags: ValidatedTag[],
+  unit: DatasetUnit = REVIEW,
 ): AnalysisResult {
   const reviewCount = matched.length;
-  if (reviewCount === 0) return zeroResult(product, input);
+  if (reviewCount === 0) return zeroResult(product, input, unit);
 
   const reviewsById = new Map(matched.map((r) => [r.id, r] as const));
   const averageRating = round1(matched.reduce((sum, r) => sum + r.rating, 0) / reviewCount);
@@ -33,7 +35,7 @@ export function tagsToResult(
     to: input.to,
     reviewCount,
     averageRating,
-    summary: buildSummary(product, reviewCount, averageRating, praise, faults),
+    summary: buildSummary(product, reviewCount, averageRating, praise, faults, unit),
     praise,
     faults,
     recommendations: [],
@@ -41,14 +43,14 @@ export function tagsToResult(
 }
 
 /** A zero-review result (empty window) — no network call needed to produce it. */
-export function zeroResult(product: Product, input: AnalysisInput): AnalysisResult {
+export function zeroResult(product: Product, input: AnalysisInput, unit: DatasetUnit = REVIEW): AnalysisResult {
   return {
     productName: product.name,
     from: input.from,
     to: input.to,
     reviewCount: 0,
     averageRating: 0,
-    summary: buildSummary(product, 0, 0, [], []),
+    summary: buildSummary(product, 0, 0, [], [], unit),
     praise: [],
     faults: [],
     recommendations: [],

@@ -2,6 +2,7 @@ import type { AnalysisInput, AnalysisResult, Dataset } from "../types";
 import { AnalysisError, filterReviews } from "./analysisEngine";
 import { validateTags } from "./claudeTags";
 import { tagsToResult, zeroResult } from "./tagsToResult";
+import { unitFor } from "../lib/datasetInfo";
 
 /**
  * Client-side Claude engine. It filters reviews, calls the same-origin server
@@ -26,7 +27,7 @@ export async function analyzeWithClaude(
   const matched = filterReviews(dataset.reviews, input.productId, input.from, input.to);
   // No reviews in the window: return the empty result without a network call —
   // this is the legitimate empty state, not a fallback.
-  if (matched.length === 0) return zeroResult(product, input);
+  if (matched.length === 0) return zeroResult(product, input, unitFor(dataset));
 
   const body = JSON.stringify({
     productId: input.productId,
@@ -82,7 +83,7 @@ export async function analyzeWithClaude(
     throw new AnalysisError("The analysis service returned an invalid response. Please try again.");
   }
 
-  return tagsToResult(input, product, matched, valid);
+  return tagsToResult(input, product, matched, valid, unitFor(dataset));
 }
 
 /** Map a non-2xx endpoint status to a controlled, non-leaky user message. */
