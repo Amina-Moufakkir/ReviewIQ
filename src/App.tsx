@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Dataset, Review } from "./types";
+import type { AnalysisInput, Dataset, Review } from "./types";
 import { sampleDataset } from "./data/sampleDataset";
 import { reviewStatsFor } from "./services/analysisEngine";
 import { parseReviewsCsv, loadStatsFor, CsvError, type LoadStats } from "./lib/parseReviews";
@@ -95,7 +95,12 @@ export default function App() {
   const [productId, setProductId] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const { state, analyze, reset } = useAnalysis();
+
+  // The analyst's live query. Passing it to the hook is what guarantees the
+  // visible result always describes the current selection — editing any part
+  // of it clears the previous report rather than leaving it stranded.
+  const query: AnalysisInput = { productId, from, to };
+  const { state, analyze, reset } = useAnalysis(query);
 
   const [isLoadingDataset, setIsLoadingDataset] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -230,7 +235,7 @@ export default function App() {
             onProductChange={setProductId}
             onFromChange={setFrom}
             onToChange={setTo}
-            onSubmit={() => analyze({ productId, from, to }, dataset)}
+            onSubmit={() => analyze(query, dataset)}
             isLoading={state.status === "loading"}
           />
 
