@@ -1,15 +1,36 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Dataset, Review } from "./types";
+import type { AnalysisInput, Dataset, Review } from "./types";
 import { sampleDataset } from "./data/sampleDataset";
 import { reviewStatsFor } from "./services/analysisEngine";
 import { parseReviewsCsv, loadStatsFor, CsvError, type LoadStats } from "./lib/parseReviews";
 import { adaptAmazonCsv } from "./lib/amazonAdapter";
-import { AMAZON_DATASET_FILE, AMAZON_DATASET_LABEL, hasDates, unitFor } from "./lib/datasetInfo";
+import {
+  AMAZON_DATASET_FILE,
+  AMAZON_DATASET_LABEL,
+  AMAZON_DEMO_FILE,
+  AMAZON_DEMO_LABEL,
+  SAMPLE_CSV_FILE,
+  hasDates,
+  unitFor,
+} from "./lib/datasetInfo";
 import { useAnalysis } from "./hooks/useAnalysis";
 import { AnalyzeForm } from "./components/AnalyzeForm";
 import { DataSourceControl } from "./components/DataSourceControl";
 import { ResultsView } from "./components/ResultsView";
 import { StateMessage } from "./components/StateMessage";
+
+/** What every data source resolves to: a dataset, and what its load did. */
+interface LoadedDataset {
+  dataset: Dataset;
+  stats: LoadStats | null;
+}
+
+const AMAZON_LOAD_ERROR = "Could not load the Amazon dataset.";
+
+const MISSING_DATASET_MESSAGE =
+  `No Amazon data is available — neither the generated dataset nor the bundled ` +
+  `demo fixture could be loaded. See "Amazon dataset" in the README. ` +
+  `You can use the built-in sample in the meantime.`;
 
 /**
  * Earliest and latest review dates in a dataset, for default range fitting.
@@ -22,34 +43,73 @@ function datasetSpan(reviews: Review[]): { from: string; to: string } {
   return { from: dates[0] ?? "", to: dates[dates.length - 1] ?? "" };
 }
 
-/** The dataset shown before the Amazon fixture finishes loading. */
-const EMPTY_DATASET: Dataset = {
+/** The placeholder shown while the default Amazon dataset is still loading. */
+const PENDING_AMAZON_DATASET: Dataset = {
   products: [],
   reviews: [],
   source: "amazon",
   label: AMAZON_DATASET_LABEL,
 };
 
-/**
- * Fetch and adapt the Amazon fixture. Kept outside the component (and free of
- * state) so the mount effect and the manual reload share one implementation.
- *
- * The fixture is developer-supplied and not committed, so a missing file is an
- * expected setup state, not a crash — it gets a message that says how to fix
- * it. A dev server answering an unknown path with the SPA's index.html looks
- * like a 200 of HTML, so that counts as missing too.
- */
-async function fetchAmazonDataset() {
-  const res = await fetch(`${import.meta.env.BASE_URL}${AMAZON_DATASET_FILE}`);
-  const servedHtml = (res.headers.get("content-type") ?? "").includes("text/html");
-  if (!res.ok || servedHtml) throw new CsvError(MISSING_DATASET_MESSAGE);
-  return adaptAmazonCsv(await res.text(), AMAZON_DATASET_LABEL);
+/** A file served from public/, under whatever base path the app is hosted at. */
+function publicUrl(file: string): string {
+  return `${import.meta.env.BASE_URL}${file}`;
 }
 
-const MISSING_DATASET_MESSAGE =
-  `The Amazon dataset is not available. It is supplied locally rather than committed — ` +
-  `see "Amazon dataset" in the README, then run \`npm run build:amazon\`. ` +
-  `You can use the built-in sample in the meantime.`;
+// The three loaders below share one signature, `() => Promise<LoadedDataset>`,
+// so the component can run any of them through the same load/error/finish path.
+// They are module-level and state-free, which also lets the mount effect and the
+// manual reload share a single implementation.
+
+/**
+ * The Amazon source, in order of preference:
+ *
+ *   1. `public/amazon-products.csv` — the real dataset, generated locally by
+ *      `npm run build:amazon`. Not committed, so only a developer who has
+ *      downloaded the source has it.
+ *   2. `public/amazon-demo.csv` — a committed, fully synthetic stand-in in the
+ *      same column shape. This is what deployed builds get.
+ *
+ * The fallback is deliberately to synthetic *Amazon-shaped* data, never to the
+ * ordinary review sample: a visitor exploring the Amazon path must actually be
+ * exercising the Amazon adapter, not a different dataset wearing its name. The
+ * label says "synthetic" so the two are never confused.
+ */
+async function fetchAmazonDataset(): Promise<LoadedDataset> {
+  const real = await fetchCsv(AMAZON_DATASET_FILE);
+  const text = real ?? (await fetchCsv(AMAZON_DEMO_FILE));
+  if (text === null) throw new CsvError(MISSING_DATASET_MESSAGE);
+
+  const { dataset, stats } = adaptAmazonCsv(
+    text,
+    real ? AMAZON_DATASET_LABEL : AMAZON_DEMO_LABEL,
+  );
+  return { dataset, stats };
+}
+
+/**
+ * Fetch a CSV from public/, or `null` when it is not there. A dev server
+ * answering an unknown path with the SPA's index.html looks like a 200 of
+ * HTML, so that counts as absent too.
+ */
+async function fetchCsv(file: string): Promise<string | null> {
+  const res = await fetch(publicUrl(file));
+  const servedHtml = (res.headers.get("content-type") ?? "").includes("text/html");
+  if (!res.ok || servedHtml) return null;
+  return res.text();
+}
+
+async function fetchSampleCsv(): Promise<LoadedDataset> {
+  const res = await fetch(publicUrl(SAMPLE_CSV_FILE));
+  if (!res.ok) throw new CsvError(`Could not load the sample file (HTTP ${res.status}).`);
+  const result = parseReviewsCsv(await res.text(), SAMPLE_CSV_FILE);
+  return { dataset: result.dataset, stats: loadStatsFor(result) };
+}
+
+async function readUploadedCsv(file: File): Promise<LoadedDataset> {
+  const result = parseReviewsCsv(await file.text(), file.name);
+  return { dataset: result.dataset, stats: loadStatsFor(result) };
+}
 
 /** User-facing message for a failed dataset load, without leaking internals. */
 function loadErrorMessage(err: unknown, fallback: string): string {
@@ -57,101 +117,100 @@ function loadErrorMessage(err: unknown, fallback: string): string {
 }
 
 export default function App() {
-  const [dataset, setDataset] = useState<Dataset>(EMPTY_DATASET);
+  const [dataset, setDataset] = useState<Dataset>(PENDING_AMAZON_DATASET);
   const [productId, setProductId] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const { state, analyze, reset } = useAnalysis();
 
-  const [isParsing, setIsParsing] = useState(true);
-  const [parseError, setParseError] = useState("");
-  const [stats, setStats] = useState<LoadStats | null>(null);
+  // The analyst's live query. Passing it to the hook is what guarantees the
+  // visible result always describes the current selection — editing any part
+  // of it clears the previous report rather than leaving it stranded.
+  const query: AnalysisInput = { productId, from, to };
+  const { state, analyze, reset } = useAnalysis(query);
+
+  const [isLoadingDataset, setIsLoadingDataset] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [loadStats, setLoadStats] = useState<LoadStats | null>(null);
 
   const productStats = reviewStatsFor(productId, dataset.reviews);
-  const dated = hasDates(dataset);
+  const hasReviewDates = hasDates(dataset);
   const unit = unitFor(dataset);
 
   // Switch the active dataset: reset the product, fit the date range to it,
   // and clear any previous analysis.
   const applyDataset = useCallback(
-    (next: Dataset, loadStats: LoadStats | null) => {
+    ({ dataset: next, stats }: LoadedDataset) => {
       const span = datasetSpan(next.reviews);
       setDataset(next);
       setProductId(next.products[0]?.id ?? "");
       setFrom(span.from);
       setTo(span.to);
-      setStats(loadStats);
-      setParseError("");
+      setLoadStats(stats);
+      setLoadError("");
       reset();
     },
     [reset],
   );
 
-  async function handleLoadAmazon() {
-    setIsParsing(true);
-    setParseError("");
-    try {
-      const { dataset: next, stats: loadStats } = await fetchAmazonDataset();
-      applyDataset(next, loadStats);
-    } catch (err) {
-      setParseError(loadErrorMessage(err, "Could not load the Amazon dataset."));
-    } finally {
-      setIsParsing(false);
-    }
+  /**
+   * Run a loader and apply whatever it returns. `isStale` lets the mount effect
+   * drop a result whose component has since unmounted; user-initiated loads
+   * always apply theirs.
+   */
+  const runLoad = useCallback(
+    async (
+      load: () => Promise<LoadedDataset>,
+      fallbackMessage: string,
+      isStale: () => boolean = () => false,
+    ) => {
+      try {
+        const loaded = await load();
+        if (!isStale()) applyDataset(loaded);
+      } catch (err) {
+        if (!isStale()) setLoadError(loadErrorMessage(err, fallbackMessage));
+      } finally {
+        if (!isStale()) setIsLoadingDataset(false);
+      }
+    },
+    [applyDataset],
+  );
+
+  /** Enter the loading state before a user-initiated load. */
+  function beginLoad() {
+    setIsLoadingDataset(true);
+    setLoadError("");
   }
 
-  // The Amazon dataset is the default: load it once on mount. `isParsing`
-  // already starts true, so the effect touches state only after the fetch
+  // The Amazon dataset is the default: load it once on mount. The initial state
+  // already says "loading", so the effect touches state only after the fetch
   // resolves — never synchronously during the effect body.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      try {
-        const { dataset: next, stats: loadStats } = await fetchAmazonDataset();
-        if (!cancelled) applyDataset(next, loadStats);
-      } catch (err) {
-        if (!cancelled) setParseError(loadErrorMessage(err, "Could not load the Amazon dataset."));
-      } finally {
-        if (!cancelled) setIsParsing(false);
-      }
+      await runLoad(fetchAmazonDataset, AMAZON_LOAD_ERROR, () => cancelled);
     })();
     return () => {
       cancelled = true;
     };
-  }, [applyDataset]);
+  }, [runLoad]);
 
-  async function handleFile(file: File) {
-    setIsParsing(true);
-    setParseError("");
-    try {
-      const text = await file.text();
-      const result = parseReviewsCsv(text, file.name);
-      applyDataset(result.dataset, loadStatsFor(result));
-    } catch (err) {
-      setParseError(err instanceof CsvError ? err.message : "Could not read the file.");
-    } finally {
-      setIsParsing(false);
-    }
+  function handleLoadAmazon() {
+    beginLoad();
+    void runLoad(fetchAmazonDataset, AMAZON_LOAD_ERROR);
   }
 
-  async function handleLoadSampleCsv() {
-    setIsParsing(true);
-    setParseError("");
-    try {
-      const res = await fetch(`${import.meta.env.BASE_URL}sample-reviews.csv`);
-      if (!res.ok) throw new CsvError(`Could not load the sample file (HTTP ${res.status}).`);
-      const text = await res.text();
-      const result = parseReviewsCsv(text, "sample-reviews.csv");
-      applyDataset(result.dataset, loadStatsFor(result));
-    } catch (err) {
-      setParseError(err instanceof CsvError ? err.message : "Could not load the sample file.");
-    } finally {
-      setIsParsing(false);
-    }
+  function handleLoadSampleCsv() {
+    beginLoad();
+    void runLoad(fetchSampleCsv, "Could not load the sample file.");
+  }
+
+  function handleFile(file: File) {
+    beginLoad();
+    void runLoad(() => readUploadedCsv(file), "Could not read the file.");
   }
 
   function handleUseBuiltIn() {
-    applyDataset(sampleDataset, null);
+    applyDataset({ dataset: sampleDataset, stats: null });
   }
 
   return (
@@ -181,9 +240,9 @@ export default function App() {
         <div className="flex flex-col gap-6">
           <DataSourceControl
             dataset={dataset}
-            isParsing={isParsing}
-            error={parseError}
-            stats={stats}
+            isLoadingDataset={isLoadingDataset}
+            error={loadError}
+            loadStats={loadStats}
             unit={unit}
             onFile={handleFile}
             onLoadAmazon={handleLoadAmazon}
@@ -198,11 +257,11 @@ export default function App() {
             to={to}
             productStats={productStats}
             unit={unit}
-            hasDates={dated}
+            hasDates={hasReviewDates}
             onProductChange={setProductId}
             onFromChange={setFrom}
             onToChange={setTo}
-            onSubmit={() => analyze({ productId, from, to }, dataset)}
+            onSubmit={() => analyze(query, dataset)}
             isLoading={state.status === "loading"}
           />
 
@@ -212,7 +271,7 @@ export default function App() {
               <StateMessage
                 tone="idle"
                 title="Awaiting your query"
-                description={`Choose a product${dated ? " and window" : ""} above, then run the analysis.`}
+                description={`Choose a product${hasReviewDates ? " and window" : ""} above, then run the analysis.`}
               />
             ) : null}
 
@@ -229,7 +288,7 @@ export default function App() {
                 tone="empty"
                 title={`No ${unit.many} to analyze`}
                 description={
-                  dated
+                  hasReviewDates
                     ? `Nothing was written about ${state.result.productName} between these dates. Try widening the window.`
                     : `There is nothing to analyze for ${state.result.productName}.`
                 }
@@ -241,7 +300,7 @@ export default function App() {
             ) : null}
 
             {state.status === "success" ? (
-              <ResultsView result={state.result} unit={unit} hasDates={dated} />
+              <ResultsView result={state.result} unit={unit} hasDates={hasReviewDates} />
             ) : null}
           </div>
         </div>

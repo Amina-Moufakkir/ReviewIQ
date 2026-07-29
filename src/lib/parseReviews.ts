@@ -1,5 +1,5 @@
 import type { Dataset, Product, Review } from "../types";
-import { parseCsv } from "./csv";
+import { parseCsv, readColumns, type CsvColumns } from "./csv";
 import { isValidIsoDate } from "./date";
 
 /** Thrown when a CSV cannot be turned into a usable dataset. */
@@ -78,11 +78,7 @@ export function loadStatsFor(result: ParseResult): LoadStats {
  * Individual malformed rows are skipped and counted rather than aborting.
  */
 export function parseReviewsCsv(text: string, label: string): ParseResult {
-  const rows = parseCsv(text);
-  if (rows.length === 0) {
-    throw new CsvError("The file is empty.");
-  }
-  return buildDataset(rows, label, "uploaded");
+  return buildDataset(parseCsv(text), label, "uploaded");
 }
 
 /**
@@ -102,86 +98,37 @@ export function buildDataset(
     throw new CsvError("The file is empty.");
   }
 
-  const header = rows[0]!.map((h) => h.trim());
-  const index: Record<string, number> = {};
-  header.forEach((h, i) => {
-    index[h] = i;
-  });
-
-  const missing = REQUIRED_COLUMNS.filter((c) => !(c in index));
+  const columns = readColumns(rows[0]!);
+  const missing = columns.missing(REQUIRED_COLUMNS);
   if (missing.length > 0) {
     throw new CsvError(`Missing required column${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}.`);
   }
 
-  const cell = (row: string[], name: string): string => (row[index[name]!] ?? "").trim();
-  const hasDateColumn = "review_date" in index;
-
+  const isDated = columns.has("review_date");
   const reviews: Review[] = [];
   const productMap = new Map<string, Product>();
   const seenIds = new Set<string>();
   const skipReasons: Partial<Record<SkipReason, number>> = {};
   let skipped = 0;
 
-  const skip = (reason: SkipReason) => {
-    skipReasons[reason] = (skipReasons[reason] ?? 0) + 1;
-    skipped++;
-  };
-
   for (let r = 1; r < rows.length; r++) {
-    const row = rows[r]!;
-    const id = cell(row, "review_id");
-    const productId = cell(row, "product_id");
-    // Undated sources carry "" — never a stand-in date. See the note above.
-    const date = hasDateColumn ? cell(row, "review_date") : "";
-    const ratingRaw = cell(row, "rating");
-    const textVal = cell(row, "review_text");
-    const rating = Number(ratingRaw);
+    const fields = readRow(rows[r]!, columns, isDated);
 
-    // Checked in a fixed order so one row always yields the same first reason.
-    if (!id) {
-      skip("missing_review_id");
+    const reason = rejectionFor(fields, isDated, seenIds);
+    if (reason) {
+      skipReasons[reason] = (skipReasons[reason] ?? 0) + 1;
+      skipped++;
       continue;
     }
-    if (seenIds.has(id)) {
-      skip("duplicate_review_id");
-      continue;
-    }
-    if (!productId) {
-      skip("missing_product_id");
-      continue;
-    }
-    if (hasDateColumn && !isValidIsoDate(date)) {
-      skip("invalid_date");
-      continue;
-    }
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      skip("invalid_rating");
-      continue;
-    }
-    if (!textVal) {
-      skip("missing_review_text");
-      continue;
-    }
-    seenIds.add(id);
+    seenIds.add(fields.id);
 
-    const productName = cell(row, "product_name") || productId;
-    const category = cell(row, "category") || "Uncategorized";
-    reviews.push({
-      id,
-      productId,
-      date,
-      rating,
-      text: textVal,
-      title: "review_title" in index ? cell(row, "review_title") || undefined : undefined,
-      category,
-      verifiedPurchase: "verified_purchase" in index ? cell(row, "verified_purchase") === "true" : undefined,
-      country: "country" in index ? cell(row, "country") || undefined : undefined,
-      promotion: "promotion" in index ? cell(row, "promotion") || undefined : undefined,
-      discountPercent: "discount_percent" in index ? parseDiscount(cell(row, "discount_percent")) : undefined,
-    });
-
-    if (!productMap.has(productId)) {
-      productMap.set(productId, { id: productId, name: productName, category });
+    reviews.push(toReview(fields, rows[r]!, columns));
+    if (!productMap.has(fields.productId)) {
+      productMap.set(fields.productId, {
+        id: fields.productId,
+        name: fields.productName || fields.productId,
+        category: fields.category,
+      });
     }
   }
 
@@ -194,6 +141,68 @@ export function buildDataset(
     dataset: { products, reviews, source, label },
     skipped,
     skipReasons,
+  };
+}
+
+/** The required columns of one row, read and normalized. */
+interface RowFields {
+  id: string;
+  productId: string;
+  date: string;
+  rating: number;
+  text: string;
+  productName: string;
+  category: string;
+}
+
+function readRow(row: string[], columns: CsvColumns, isDated: boolean): RowFields {
+  return {
+    id: columns.cell(row, "review_id"),
+    productId: columns.cell(row, "product_id"),
+    // Undated sources carry "" — never a stand-in date. See the note above.
+    date: isDated ? columns.cell(row, "review_date") : "",
+    rating: Number(columns.cell(row, "rating")),
+    text: columns.cell(row, "review_text"),
+    productName: columns.cell(row, "product_name"),
+    category: columns.cell(row, "category") || "Uncategorized",
+  };
+}
+
+/**
+ * Why a row cannot become a review, or `null` if it can. The checks run in a
+ * fixed order so one row always reports the same first reason.
+ */
+function rejectionFor(fields: RowFields, isDated: boolean, seenIds: Set<string>): SkipReason | null {
+  if (!fields.id) return "missing_review_id";
+  if (seenIds.has(fields.id)) return "duplicate_review_id";
+  if (!fields.productId) return "missing_product_id";
+  if (isDated && !isValidIsoDate(fields.date)) return "invalid_date";
+  if (!Number.isInteger(fields.rating) || fields.rating < 1 || fields.rating > 5) {
+    return "invalid_rating";
+  }
+  if (!fields.text) return "missing_review_text";
+  return null;
+}
+
+/** Build a Review from an accepted row, reading optional columns if present. */
+function toReview(fields: RowFields, row: string[], columns: CsvColumns): Review {
+  const optional = (name: string) => (columns.has(name) ? columns.cell(row, name) || undefined : undefined);
+  return {
+    id: fields.id,
+    productId: fields.productId,
+    date: fields.date,
+    rating: fields.rating,
+    text: fields.text,
+    category: fields.category,
+    title: optional("review_title"),
+    country: optional("country"),
+    promotion: optional("promotion"),
+    verifiedPurchase: columns.has("verified_purchase")
+      ? columns.cell(row, "verified_purchase") === "true"
+      : undefined,
+    discountPercent: columns.has("discount_percent")
+      ? parseDiscount(columns.cell(row, "discount_percent"))
+      : undefined,
   };
 }
 

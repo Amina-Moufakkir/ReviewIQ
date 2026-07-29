@@ -1,5 +1,5 @@
 import type { Finding } from "../types";
-import type { DatasetUnit } from "../lib/datasetInfo";
+import { pluralize, scopeLabel, type DatasetUnit } from "../lib/datasetInfo";
 
 interface SentimentColumnProps {
   tone: "praise" | "fault";
@@ -39,8 +39,8 @@ export function SentimentColumn({
 
       {findings.length === 0 ? (
         <p className="text-sm text-ink-soft">
-          No {isPraise ? "positive" : "negative"} themes have enough evidence
-          {hasDates ? " in this window" : ` in these ${unit.many}`}.
+          No {isPraise ? "positive" : "negative"} themes have enough evidence{" "}
+          {scopeLabel(unit, hasDates)}.
         </p>
       ) : (
         <ul className="flex flex-col gap-5">
@@ -54,7 +54,7 @@ export function SentimentColumn({
               </div>
               <p className="font-mono text-[11px] text-ink-soft">
                 Mentioned in {f.mentions} of {reviewCount} selected{" "}
-                {reviewCount === 1 ? unit.one : unit.many} · {f.percent}%
+                {pluralize(reviewCount, unit)} · {f.percent}%
               </p>
               <blockquote className="border-l border-rule pl-3">
                 <p className="text-sm italic leading-relaxed text-ink">“{f.quote}”</p>

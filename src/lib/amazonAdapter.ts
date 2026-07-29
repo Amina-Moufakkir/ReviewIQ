@@ -1,5 +1,5 @@
 import type { Dataset } from "../types";
-import { parseCsv } from "./csv";
+import { parseCsv, readColumns, type CsvColumns } from "./csv";
 import { buildDataset, CsvError, type LoadStats, type SkipReason } from "./parseReviews";
 
 /**
@@ -58,12 +58,6 @@ export type AmazonSkipReason =
   | SkipReason;
 
 /**
- * Load stats for an Amazon parse. Reasons come from both gates: the adapter's
- * own checks and the shared loader's. `accepted + skipped === parsed`.
- */
-export type AmazonStats = LoadStats;
-
-/**
  * Normalized, source-preserving view of one accepted record. Nothing in the MVP
  * renders these yet — they exist so prices, counts and the category hierarchy
  * are available for validation and grouping without re-parsing the CSV, and so
@@ -81,6 +75,8 @@ export interface AmazonRecord {
   rating: number;
   /** The product-average rating exactly as the source recorded it, e.g. 4.2. */
   sourceRating: number;
+  /** `review_content` verbatim — several customers' reviews, never split. */
+  text: string;
   /** Rupee amounts and counts with ₹ and thousands separators stripped. */
   discountedPrice?: number;
   actualPrice?: number;
@@ -99,7 +95,11 @@ export interface AmazonRecord {
 
 export interface AmazonAdapterResult {
   dataset: Dataset;
-  stats: AmazonStats;
+  /**
+   * Reasons come from both gates: the adapter's own checks and the shared
+   * loader's. `accepted + skipped === parsed`.
+   */
+  stats: LoadStats;
   /** Accepted records, in dataset order, with normalized and raw source values. */
   records: AmazonRecord[];
 }
@@ -114,96 +114,30 @@ export function adaptAmazonCsv(text: string, label: string): AmazonAdapterResult
   const rows = parseCsv(text);
   if (rows.length === 0) throw new CsvError("The file is empty.");
 
-  const header = rows[0]!.map((h) => h.trim());
-  const index: Record<string, number> = {};
-  header.forEach((h, i) => {
-    index[h] = i;
-  });
-
-  const missing = REQUIRED_SOURCE_COLUMNS.filter((c) => !(c in index));
+  const columns = readColumns(rows[0]!);
+  const missing = columns.missing(REQUIRED_SOURCE_COLUMNS);
   if (missing.length > 0) {
     throw new CsvError(
       `The Amazon dataset is missing required column${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}.`,
     );
   }
 
-  const cell = (row: string[], name: string): string =>
-    name in index ? (row[index[name]!] ?? "").trim() : "";
-
-  const parsed = rows.length - 1;
+  const parsedCount = rows.length - 1;
   const skipReasons: Partial<Record<AmazonSkipReason, number>> = {};
-  const skip = (reason: AmazonSkipReason) => {
-    skipReasons[reason] = (skipReasons[reason] ?? 0) + 1;
-  };
-
-  const canonical: string[][] = [[...CANONICAL_COLUMNS]];
   const records: AmazonRecord[] = [];
 
   for (let r = 1; r < rows.length; r++) {
-    const row = rows[r]!;
-    // Positional id, taken from the source row number so it is stable across
-    // runs and independent of how many earlier records were skipped.
-    const reviewId = `amz-${String(r).padStart(4, "0")}`;
-
-    const productId = cell(row, "product_id");
-    const text_ = cell(row, "review_content");
-    const rawRating = cell(row, "rating");
-    const sourceRating = Number(rawRating);
-
-    // Fixed order, so a given record always reports the same first reason.
-    if (!productId) {
-      skip("missing_product_id");
+    const mapped = mapRecord(rows[r]!, r, columns);
+    if ("skip" in mapped) {
+      skipReasons[mapped.skip] = (skipReasons[mapped.skip] ?? 0) + 1;
       continue;
     }
-    if (!text_) {
-      skip("missing_review_text");
-      continue;
-    }
-    // Rejects "|", blanks, NaN and anything that cannot round into 1–5.
-    const rating = Math.round(sourceRating);
-    if (!Number.isFinite(sourceRating) || rating < 1 || rating > 5) {
-      skip("invalid_rating");
-      continue;
-    }
-
-    const rawCategory = cell(row, "category");
-    const categoryPath = rawCategory.split("|").map((p) => p.trim()).filter(Boolean);
-    const category = categoryPath[categoryPath.length - 1] ?? "";
-
-    canonical.push([
-      reviewId,
-      productId,
-      cell(row, "product_name"),
-      category,
-      String(rating),
-      text_,
-    ]);
-
-    records.push({
-      reviewId,
-      productId,
-      productName: cell(row, "product_name"),
-      categoryPath,
-      category,
-      rating,
-      sourceRating,
-      discountedPrice: parseAmount(cell(row, "discounted_price")),
-      actualPrice: parseAmount(cell(row, "actual_price")),
-      discountPercent: parseAmount(cell(row, "discount_percentage")),
-      ratingCount: parseAmount(cell(row, "rating_count")),
-      raw: {
-        discounted_price: cell(row, "discounted_price"),
-        actual_price: cell(row, "actual_price"),
-        discount_percentage: cell(row, "discount_percentage"),
-        rating: rawRating,
-        rating_count: cell(row, "rating_count"),
-        category: rawCategory,
-      },
-    });
+    records.push(mapped);
   }
 
   // One loader, one set of rules: the canonical rows go through the same
   // validation an uploaded CSV does, and its skips are folded in below.
+  const canonical = [[...CANONICAL_COLUMNS], ...records.map(toCanonicalRow)];
   const { dataset, skipReasons: loaderReasons } = buildDataset(canonical, label, "amazon");
 
   for (const [reason, count] of Object.entries(loaderReasons)) {
@@ -211,23 +145,93 @@ export function adaptAmazonCsv(text: string, label: string): AmazonAdapterResult
     skipReasons[key] = (skipReasons[key] ?? 0) + (count ?? 0);
   }
 
-  // Attach the preserved decimals to the reviews the loader built. Records are
-  // keyed by the synthetic id, so this cannot drift if the loader skips a row.
-  const bySourceRating = new Map(records.map((rec) => [rec.reviewId, rec.sourceRating] as const));
+  // Attach the preserved decimals to the reviews the loader built, keyed by the
+  // synthetic id so the two cannot drift.
+  const sourceRatingById = new Map(records.map((rec) => [rec.reviewId, rec.sourceRating] as const));
   for (const review of dataset.reviews) {
-    const source = bySourceRating.get(review.id);
-    if (source !== undefined) review.sourceRating = source;
+    const sourceRating = sourceRatingById.get(review.id);
+    if (sourceRating !== undefined) review.sourceRating = sourceRating;
   }
 
-  const accepted = dataset.reviews.length;
-  const skipped = parsed - accepted;
+  // Defensive: the adapter has already excluded everything the loader rejects,
+  // and synthetic ids are unique by construction, so this normally keeps every
+  // record. It guarantees `records` can never describe a row the dataset
+  // dropped, whatever the loader decides in future.
   const acceptedIds = new Set(dataset.reviews.map((r) => r.id));
+  const accepted = dataset.reviews.length;
 
   return {
     dataset,
-    stats: { parsed, accepted, skipped, skipReasons },
+    stats: { parsed: parsedCount, accepted, skipped: parsedCount - accepted, skipReasons },
     records: records.filter((rec) => acceptedIds.has(rec.reviewId)),
   };
+}
+
+/**
+ * Map one source row to a normalized record, or report why it cannot become
+ * one. The checks run in a fixed order so a given row always reports the same
+ * first reason.
+ */
+function mapRecord(
+  row: string[],
+  rowNumber: number,
+  columns: CsvColumns,
+): AmazonRecord | { skip: AmazonSkipReason } {
+  const cell = (name: string) => columns.cell(row, name);
+
+  const productId = cell("product_id");
+  if (!productId) return { skip: "missing_product_id" };
+
+  const reviewText = cell("review_content");
+  if (!reviewText) return { skip: "missing_review_text" };
+
+  const rawRating = cell("rating");
+  const sourceRating = Number(rawRating);
+  const rating = Math.round(sourceRating);
+  // Rejects "|", blanks, NaN and anything that cannot round into 1–5.
+  if (!Number.isFinite(sourceRating) || rating < 1 || rating > 5) {
+    return { skip: "invalid_rating" };
+  }
+
+  const rawCategory = cell("category");
+  const categoryPath = rawCategory.split("|").map((part) => part.trim()).filter(Boolean);
+
+  return {
+    // Positional id, taken from the source row number so it is stable across
+    // runs and independent of how many earlier records were skipped.
+    reviewId: `amz-${String(rowNumber).padStart(4, "0")}`,
+    productId,
+    productName: cell("product_name"),
+    categoryPath,
+    category: categoryPath[categoryPath.length - 1] ?? "",
+    rating,
+    sourceRating,
+    text: reviewText,
+    discountedPrice: parseAmount(cell("discounted_price")),
+    actualPrice: parseAmount(cell("actual_price")),
+    discountPercent: parseAmount(cell("discount_percentage")),
+    ratingCount: parseAmount(cell("rating_count")),
+    raw: {
+      discounted_price: cell("discounted_price"),
+      actual_price: cell("actual_price"),
+      discount_percentage: cell("discount_percentage"),
+      rating: rawRating,
+      rating_count: cell("rating_count"),
+      category: rawCategory,
+    },
+  };
+}
+
+/** Project a record onto CANONICAL_COLUMNS, in that exact order. */
+function toCanonicalRow(record: AmazonRecord): string[] {
+  return [
+    record.reviewId,
+    record.productId,
+    record.productName,
+    record.category,
+    String(record.rating),
+    record.text,
+  ];
 }
 
 /**

@@ -4,7 +4,25 @@
 
 **Vercel (same-origin app + `/api`) → https://reviewiq-six.vercel.app/**
 
-ReviewIQ helps E-commerce Analysts quickly understand customer feedback by turning product reviews into a concise, evidence-backed sentiment brief.
+> The public demo uses a small **synthetic Amazon-style dataset**, so the full
+> integration can be explored without redistributing the original data. Local
+> developers can download the real dataset and run `npm run build:amazon` to
+> replace it. See [Getting the dataset](#getting-the-dataset).
+
+## In short
+
+ReviewIQ helps E-commerce Analysts understand customer feedback fast: it turns
+raw reviews into a structured product brief — what customers praise, what they
+fault, the recurring themes, and what to do next — with every claim backed by
+counts and a real quote from the selected rows.
+
+It runs **two interchangeable analysis engines** — a deterministic heuristic one
+and a Claude-powered semantic one — behind a single `analyzeReviews()` contract,
+over **three data sources**: a real Amazon product dataset, a synthetic review
+sample, and any CSV you upload. Those sources do not share a data model — an
+Amazon row is a product record, a sample row is one customer's review — so the
+engineering problem the project actually solves is holding one loader, one
+contract and one UI steady while the shape of the underlying data changes.
 
 ## Problem
 
@@ -25,19 +43,51 @@ The core MVP is complete. An analyst can:
   how promoted purchases compare with full-price ones on average rating
 
 Every insight — findings, mention counts, percentages, representative quotes,
-and the summary — is derived only from the reviews inside the selected product
-and date range.
+and the summary — is derived only from the rows inside the selected product
+and, where the data carries review dates, the selected date range. The Amazon
+dataset has no dates, so a run there covers every product record for the chosen
+product.
+
+## Two data models, one contract
+
+ReviewIQ deliberately supports two kinds of row, and names them differently
+rather than forcing one vocabulary over both:
+
+- **Review datasets** (the built-in sample, the 204-review sample, uploaded
+  CSVs) are analyzed **review-by-review**: one row is one customer's review,
+  with that customer's own star rating and, usually, a date.
+- **Amazon datasets** are analyzed **record-by-record**: one row is a product
+  listing that already aggregates many customers — a product-average rating and
+  roughly eight customers' review text concatenated into a single cell, with no
+  date anywhere in the source.
+
+The distinction is load-bearing, not cosmetic. It decides the noun the UI uses
+("1,464 product records", never "1,464 reviews"), whether the date window is
+shown at all, and how much a percentage is really claiming. `unitFor()` in
+`src/lib/datasetInfo.ts` is the single place that decision is made; everything
+downstream reads it. See [What one row actually is](#what-one-row-actually-is)
+for what this costs analytically.
 
 ## CSV upload
 
 Upload a CSV of reviews and ReviewIQ analyzes it in place — no backend. Required
-columns: `review_id`, `product_id`, `product_name`, `category`, `review_date`
-(`YYYY-MM-DD`), `rating` (1–5), `review_text`. Optional: `review_title`,
-`verified_purchase`, `country`, `promotion`, `discount_percent`. See [`public/sample-reviews.csv`](public/sample-reviews.csv)
-for the exact format. Rows with a **strictly-invalid calendar date** (e.g.
-`2026-02-30`, `2026-13-01`), an out-of-range rating, or a duplicate id are
-skipped and counted; the date range auto-fits the uploaded data. Everything is
-parsed in the browser — no reviews are uploaded to a server.
+columns: `review_id`, `product_id`, `product_name`, `category`, `rating` (1–5),
+`review_text`. Optional: `review_date`, `review_title`, `verified_purchase`,
+`country`, `promotion`, `discount_percent`. See [`public/sample-reviews.csv`](public/sample-reviews.csv)
+for the exact format.
+
+`review_date` is the one optional column that changes how the dataset behaves:
+
+- **Present** — every row must hold a valid calendar date (`YYYY-MM-DD`). Rows
+  with a **strictly-invalid** one (e.g. `2026-02-30`, `2026-13-01`, or a blank
+  cell) are skipped and counted, and the date range auto-fits the data.
+- **Absent** — the file is treated as **undated**. Every row loads with no date
+  and the date window is hidden rather than shown empty; a run covers every row
+  for the chosen product. This is how the Amazon dataset loads.
+
+Rows with an out-of-range rating or a duplicate id are skipped and counted
+either way. Everything is parsed in the browser — no reviews are uploaded to a
+server.
 
 ## How the analysis works
 
@@ -47,9 +97,17 @@ ReviewIQ has **two analysis engines** behind a single async boundary,
 the engine that produces the tags changes. Selection is by configuration
 (`VITE_ANALYSIS_ENGINE`), not a user-facing toggle.
 
-No backend, database, or accounts are required for either engine's data: reviews
-come from the built-in sample or a CSV you provide, and are parsed entirely in
-the browser.
+The heuristic engine was built **first, on purpose**: it is explainable,
+testable, free to run, and deterministic, so the whole product — filtering,
+evidence, thresholds, quotes, UI — could be proven correct without a model in
+the loop. The Claude engine was added behind the same boundary afterwards.
+[Why the second engine exists](#why-the-second-engine-exists) is where the
+interesting part is: the Amazon dataset makes the difference between them
+measurable rather than theoretical.
+
+No backend, database, or accounts are required for either engine's data: rows
+come from the Amazon fixture, the built-in sample, or a CSV you provide, and are
+parsed entirely in the browser.
 
 ### Engine 1 — Heuristic (default, no backend, fully static)
 
@@ -67,8 +125,9 @@ that runs entirely in the browser with no API calls. It:
   when the reviews carry promotion data — comparing promoted vs full-price
   purchases on average rating; datasets without it simply omit the section.
 
-Each finding's percentage is that theme's supporting reviews as a share of the
-reviews in the selected product and window ("N of M selected reviews · P%").
+Each finding's percentage is that theme's supporting rows as a share of the rows
+in the selected product and window ("N of M selected reviews · P%", or "product
+records" for undated product-level data such as the Amazon dataset).
 Because it needs no server, this engine powers the static **GitHub Pages demo**,
 and it is deterministic — the same input always produces the same output.
 
@@ -88,6 +147,33 @@ rather than matching a fixed keyword list. It:
 So the summary sentence and every number are computed in code under **both**
 engines; what the Claude engine changes is *how themes and per-mention sentiment
 are detected* (language understanding vs. a fixed keyword list + star rating).
+
+### Why the second engine exists
+
+On ordinary review data the two engines are close: one row is one customer with
+one opinion and one star rating, so deriving sentiment from the rating is a
+reasonable approximation and the heuristic engine produces a useful brief.
+
+The Amazon dataset is where that approximation breaks, and it breaks
+*measurably*. Each row's rating is a product **average** over thousands of
+customers, so it regresses toward the middle: across the 1,464 accepted records,
+1,422 round to ≥ 4 and exactly **2** round to ≤ 2. The heuristic engine reads
+sentiment from that number, so it has almost no fault evidence to find — the
+"what they fault" column comes back near-empty not because the products have no
+problems, but because averaging destroyed the signal the engine depends on. The
+complaints are still there, in the text, in the same rows.
+
+The Claude engine reads that text, and assigns sentiment per theme *mention*
+rather than per row, so a record whose rounded rating says 4 can still yield a
+fault. **The dataset itself is the argument for semantic analysis** — not a
+preference for models over rules, but a data shape a rating-based heuristic
+structurally cannot answer, whatever its keyword list. Swapping the source is
+what exposed it, which is precisely why both engines sit behind one contract.
+
+(The heuristic half of that comparison is measured — 1,422 vs 2 is counted
+directly from the accepted records. The Claude half is a property of how the
+engine assigns sentiment, verified end-to-end on review data; a fixed evaluation
+set on the Amazon data is the benchmark still deferred below.)
 
 ### Security model
 
@@ -123,11 +209,29 @@ real Amazon product listings. It is fetched at runtime from
 by the same loader as any uploaded CSV, and adapted by
 `src/lib/amazonAdapter.ts`.
 
-> **The dataset is not committed to this repository — you supply it locally.**
-> Its license and redistribution terms have not been verified, so nothing
-> derived from it is published here. See [Getting the dataset](#getting-the-dataset)
-> below. Without it the app starts, says so, and offers the built-in sample; the
-> dataset-specific tests skip rather than fail.
+> **The real dataset is not committed to this repository — you supply it
+> locally.** Its license and redistribution terms have not been verified, so
+> nothing derived from it is published here. See
+> [Getting the dataset](#getting-the-dataset) below.
+
+**The Amazon source resolves in this order:**
+
+1. `public/amazon-products.csv` — the real dataset, generated locally by
+   `npm run build:amazon`.
+2. `public/amazon-demo.csv` — a committed, fully **synthetic** stand-in in the
+   same column shape. This is what deployed builds get.
+
+The fallback is deliberately to synthetic *Amazon-shaped* data and never to the
+ordinary review sample: someone exploring the Amazon path should actually be
+exercising the Amazon adapter, not a different dataset wearing its name. The
+label reads "Amazon demo records (synthetic)" and the app states in place that
+the records are invented, so the two can never be confused. The built-in sample
+and CSV upload remain separately selectable either way.
+
+Everything the integration does stays visible on the demo data: the adapter
+runs, records are undated, the wording says *product records*, the long-title
+selector shortening applies, and the parsed/accepted/skipped accounting has real
+skips to show.
 
 ### What one row actually is
 
@@ -144,7 +248,27 @@ it never labels them "reviews".
 | Parsed records | 1,465 |
 | Accepted | 1,464 |
 | Skipped | 1 (`invalid_rating` — one row whose `rating` cell is `\|`) |
-| Products derived | 1,350 distinct `product_id`s |
+| Products derived | 1,350 |
+
+The app shows the first three verbatim: *1,465 parsed · 1,464 accepted · 1
+skipped (invalid rating 1)*, above *Using Amazon product records · 1,464 product
+records · 1,350 products*.
+
+**Why 1,465 rows become 1,350 products.** Rows and products are not the same
+count, for two independent reasons:
+
+1. The 1,465 parsed rows carry **1,351 distinct `product_id`s**. 92 of those ids
+   appear on more than one row, with differing prices, rating counts and text.
+   Rows are never deduplicated; a product is derived from the **first** accepted
+   row per id, so repeated ids collapse to one product each.
+2. One row is skipped (`rating` cell is `|`). Its `product_id` appears on **no
+   other row**, so that id is lost with it — leaving **1,350 distinct ids across
+   the 1,464 accepted rows**, and therefore 1,350 products.
+
+So: 1,351 distinct ids − 1 id whose only row was invalid = 1,350 products; the
+92 repeated ids explain the gap between 1,464 accepted rows and 1,350 products,
+not the 1,351/1,350 difference. (The 92 figure is the same before and after the
+skip.)
 
 `accepted + skipped = parsed` always holds, every skip is attributed to a
 reason, and both numbers are shown in the app. No row is discarded silently.
@@ -180,7 +304,8 @@ as here, because technical compatibility is not analytical validity.
   records versus 2 — an artifact of averaging thousands of customers into one
   number, not a finding about the products. Expect a near-empty "what they
   fault" column and few recommendations from the heuristic engine. The Claude
-  engine reads the text instead and does surface faults.
+  engine reads the text instead and does surface faults — see
+  [Why the second engine exists](#why-the-second-engine-exists).
 - **No dates.** The dataset has no date field of any kind. No date is invented,
   derived, or substituted — records are undated (`date: ""`), and the date
   window is hidden rather than shown empty or pre-filled.
@@ -193,7 +318,10 @@ as here, because technical compatibility is not analytical validity.
   mid-text.
 - **Repeated products.** 92 `product_id`s appear on more than one row, with
   differing prices, counts and text. Rows are not deduplicated; products are
-  derived from the first row per id.
+  derived from the first accepted row per id, so a product's *name* and
+  *category* come from one listing while its records span all of them. See
+  [Load accounting](#load-accounting) for how this produces 1,350 products from
+  1,464 records.
 - **Currency is ₹ (INR).** Prices are Indian rupees; nothing in the app presents
   them as any other currency.
 - **No promotion insight.** `discount_percentage` is a *listing* discount, not a
@@ -208,9 +336,15 @@ gitignored and supplied locally:
 | Path | What it is | Committed? |
 | --- | --- | --- |
 | `src/amazon.csv` | raw source, 16 columns, ~4.5 MB — **you download this** | no |
-| `public/amazon-products.csv` | generated, 9 columns, ~2.3 MB — what the app fetches | no |
+| `public/amazon-products.csv` | generated, 9 columns, ~2.3 MB — preferred at runtime | no |
 | `scripts/build-amazon-csv.mjs` | the deterministic generator | **yes** |
-| `src/test/fixtures/amazon-mini.csv` | 12-record synthetic stand-in | **yes** |
+| `public/amazon-demo.csv` | 29-row synthetic dataset (25 accepted, 4 deliberate skips → 24 products) — what deployed builds serve | **yes** |
+| `src/test/fixtures/amazon-mini.csv` | 12-row synthetic fixture — tests only | **yes** |
+
+The two synthetic files are invented in the same style but serve different
+purposes and are edited independently: `amazon-demo.csv` supports the deployed
+product, `amazon-mini.csv` supports the tests. Application code never imports
+from `src/test/fixtures/` — that directory stays test-only.
 
 Two reasons nothing derived from the dataset is published here:
 
@@ -219,8 +353,9 @@ Two reasons nothing derived from the dataset is published here:
    for this repository, so it is not redistributed. Once the license explicitly
    permits redistribution, the generated fixture can be committed with the
    attribution its terms require — nothing else in the setup needs to change.
-2. **Personal data.** The raw file's `user_id` and `user_name` columns hold
-   9,269 real reviewer identities. The generator drops them (along with unused
+2. **Personal data.** The raw file's `user_id` and `user_name` columns are
+   comma-joined lists holding 11,503 identity tokens — **9,050 distinct
+   reviewer ids** (and 7,698 distinct names). The generator drops them (along with unused
    bulk: `about_product`, `img_link`, `product_link`, `review_id`,
    `review_title`), so the generated fixture carries no personal identifiers —
    but it is still derived from the source, so rule 1 governs it too.
@@ -239,16 +374,13 @@ projection only: it drops columns and copies every cell it keeps verbatim, so
 all normalization and interpretation stay in the runtime adapter. The fixture is
 served from `public/` and fetched at runtime, so it adds nothing to the JS bundle.
 
-**Without the real dataset**, the app shows an explanatory message and the
-built-in sample and CSV upload keep working. To drive the Amazon code path
-anyway, use the committed synthetic fixture:
+**Without the real dataset**, the app falls back to `public/amazon-demo.csv`
+automatically — nothing to configure, and the built-in sample and CSV upload keep
+working alongside it. Deleting `public/amazon-products.csv` is enough to see
+exactly what a deployed build shows.
 
-```bash
-cp src/test/fixtures/amazon-mini.csv public/amazon-products.csv
-```
-
-See [`src/test/fixtures/README.md`](src/test/fixtures/README.md) for what that
-fixture deliberately contains.
+See [`src/test/fixtures/README.md`](src/test/fixtures/README.md) for what the
+test fixture deliberately contains.
 
 ## Sample dataset (for CSV-upload development)
 
@@ -287,8 +419,9 @@ complaint spike in a specific date range.
 ## Claude engine & Vercel deployment
 
 The optional **Claude engine** uses the Claude API as a *semantic tagging layer*
-(not a report generator). For the filtered reviews (selected product + date
-range) it identifies specific themes from the language, clusters equivalent
+(not a report generator). For the filtered reviews (selected product, plus the
+date range when the data has one) it identifies specific themes from the
+language, clusters equivalent
 descriptions under one canonical label, and assigns sentiment per theme mention
 with the exact supporting text span. **All counts, percentages, thresholds, and
 the summary are still computed in TypeScript** — the model judges language, code
@@ -409,14 +542,15 @@ React · TypeScript · Vite · Tailwind CSS · Vitest · Vercel Functions · Cla
 npm run dev             # start the dev server
 npm run typecheck       # tsc
 npm run lint            # eslint
-npm test                # vitest (engine, keyword matching, date validation, CSV parsing, Amazon adapter)
+npm test                # vitest (engines, CSV parsing, Amazon adapter, product labels, query-bound state)
 npm run build           # production build
 npm run build:amazon    # regenerate public/amazon-products.csv from src/amazon.csv
 ```
 
 ## Status
 
-✅ Core MVP complete — CSV upload + a deterministic heuristic engine, plus an
-optional Claude-powered semantic-tagging engine behind the same
-`analyzeReviews()` boundary (server-side key, controlled errors, identical UI
-and `AnalysisResult`). Engine chosen by `VITE_ANALYSIS_ENGINE`.
+✅ Core MVP complete — the real Amazon product dataset as the default source,
+CSV upload, and a deterministic heuristic engine, plus an optional
+Claude-powered semantic-tagging engine behind the same `analyzeReviews()`
+boundary (server-side key, controlled errors, identical UI and
+`AnalysisResult`). Engine chosen by `VITE_ANALYSIS_ENGINE`.

@@ -1,14 +1,15 @@
 import type { ChangeEvent } from "react";
 import type { Dataset } from "../types";
 import type { LoadStats } from "../lib/parseReviews";
-import { formatCount, type DatasetUnit } from "../lib/datasetInfo";
+import { formatCount, isSyntheticDemo, type DatasetUnit } from "../lib/datasetInfo";
 
 interface DataSourceControlProps {
   dataset: Dataset;
-  isParsing: boolean;
+  /** True while a dataset is being fetched or parsed. */
+  isLoadingDataset: boolean;
   error: string;
   /** What the last load read, accepted and skipped. Null for the built-in sample. */
-  stats: LoadStats | null;
+  loadStats: LoadStats | null;
   /** What one row of the active dataset is — a review, or a product record. */
   unit: DatasetUnit;
   onFile: (file: File) => void;
@@ -20,9 +21,9 @@ interface DataSourceControlProps {
 /** Choose the review dataset: Amazon product records, the sample, or an upload. */
 export function DataSourceControl({
   dataset,
-  isParsing,
+  isLoadingDataset,
   error,
-  stats,
+  loadStats,
   unit,
   onFile,
   onLoadAmazon,
@@ -63,23 +64,23 @@ export function DataSourceControl({
               type="file"
               accept=".csv,text/csv"
               className="sr-only"
-              disabled={isParsing}
+              disabled={isLoadingDataset}
               onChange={handleChange}
             />
           </label>
 
           {dataset.source !== "amazon" ? (
-            <button type="button" className={linkClass} disabled={isParsing} onClick={onLoadAmazon}>
+            <button type="button" className={linkClass} disabled={isLoadingDataset} onClick={onLoadAmazon}>
               Amazon dataset
             </button>
           ) : null}
 
           {dataset.source === "sample" ? (
-            <button type="button" className={linkClass} disabled={isParsing} onClick={onLoadSampleCsv}>
+            <button type="button" className={linkClass} disabled={isLoadingDataset} onClick={onLoadSampleCsv}>
               Load 204-review sample
             </button>
           ) : (
-            <button type="button" className={linkClass} disabled={isParsing} onClick={onUseBuiltIn}>
+            <button type="button" className={linkClass} disabled={isLoadingDataset} onClick={onUseBuiltIn}>
               Use built-in sample
             </button>
           )}
@@ -87,21 +88,30 @@ export function DataSourceControl({
       </div>
 
       {/* What this data actually is — stated wherever it is selected. */}
-      {!isParsing && !error && unit.isProductLevel ? (
+      {!isLoadingDataset && !error && unit.isProductLevel ? (
         <p className="mt-3 text-[13px] leading-relaxed text-ink-soft">
+          {isSyntheticDemo(dataset) ? (
+            <>
+              <span className="font-medium text-ink">
+                These records are invented, not real customer feedback.
+              </span>{" "}
+              The real Amazon dataset is not redistributed here, so this synthetic stand-in takes its
+              place and exercises the same path.{" "}
+            </>
+          ) : null}
           Each row is one product listing, not one customer. It carries a product-average rating and
           several customers' reviews concatenated into a single block of text, with no review dates —
           so counts below are counts of product records.
         </p>
       ) : null}
 
-      {isParsing ? (
+      {isLoadingDataset ? (
         <p className="mt-3 flex items-center gap-2 font-mono text-[11px] text-ink-soft" role="status">
           <span
             className="h-3 w-3 animate-spin rounded-full border-2 border-rule border-t-ink"
             aria-hidden="true"
           />
-          Reading file…
+          Loading data…
         </p>
       ) : null}
 
@@ -113,11 +123,11 @@ export function DataSourceControl({
 
       {/* Full accounting: every row read is either accepted or attributed to a
           skip reason. Nothing is discarded silently. */}
-      {!error && !isParsing && stats ? (
+      {!error && !isLoadingDataset && loadStats ? (
         <p className="mt-3 font-mono text-[11px] leading-relaxed text-ink-soft">
-          {stats.parsed.toLocaleString()} parsed · {stats.accepted.toLocaleString()} accepted ·{" "}
-          {stats.skipped.toLocaleString()} skipped
-          {stats.skipped > 0 ? ` (${formatSkipReasons(stats.skipReasons)})` : ""}
+          {loadStats.parsed.toLocaleString()} parsed · {loadStats.accepted.toLocaleString()} accepted ·{" "}
+          {loadStats.skipped.toLocaleString()} skipped
+          {loadStats.skipped > 0 ? ` (${formatSkipReasons(loadStats.skipReasons)})` : ""}
         </p>
       ) : null}
     </div>

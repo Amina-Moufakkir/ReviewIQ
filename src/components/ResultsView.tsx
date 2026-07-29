@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AnalysisResult, Finding } from "../types";
-import { formatDate } from "../lib/date";
-import { formatCount, type DatasetUnit } from "../lib/datasetInfo";
+import { dateRangeSuffix, formatCount, scopeLabel, type DatasetUnit } from "../lib/datasetInfo";
 import { generateMarkdownReport } from "../lib/generateMarkdownReport";
 import { copyReportToClipboard } from "../lib/copyReport";
 import { SectionLabel } from "./SectionLabel";
@@ -88,7 +87,7 @@ export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
         </h2>
         <p className="mt-3 font-mono text-xs text-ink-soft">
           {formatCount(result.reviewCount, unit)} · {result.averageRating.toFixed(1)}★ avg
-          {hasDates ? ` · ${formatDate(result.from)} – ${formatDate(result.to)}` : ""}
+          {dateRangeSuffix(result.from, result.to, hasDates)}
         </p>
         <p className="mt-4 max-w-2xl font-display text-lg leading-relaxed text-ink">
           {result.summary}
@@ -139,7 +138,7 @@ export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
         <SectionLabel>Recurring themes</SectionLabel>
         {themes.length === 0 ? (
           <p className="text-sm text-ink-soft">
-            No recurring themes surfaced{hasDates ? " in this window" : ` in these ${unit.many}`}.
+            No recurring themes surfaced {scopeLabel(unit, hasDates)}.
           </p>
         ) : (
           <ul className="flex flex-wrap gap-2">
@@ -172,8 +171,7 @@ export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
         <SectionLabel>Recommended actions</SectionLabel>
         {result.recommendations.length === 0 ? (
           <p className="text-sm text-ink-soft">
-            No actions recommended — no recurring complaints
-            {hasDates ? " in this window" : ` in these ${unit.many}`}.
+            No actions recommended — no recurring complaints {scopeLabel(unit, hasDates)}.
           </p>
         ) : (
           <ol className="border-y border-rule">
