@@ -1,6 +1,6 @@
 import type { AnalysisInput, AnalysisResult, Finding, Product, Review, Sentiment } from "../types";
 import type { ValidatedTag } from "./claudeTags";
-import { MIN_EVIDENCE, attribution, buildSummary } from "./analysisEngine";
+import { attribution, buildSummary, minEvidenceFor } from "./analysisEngine";
 import { REVIEW, type DatasetUnit } from "../lib/datasetInfo";
 
 /**
@@ -26,8 +26,8 @@ export function tagsToResult(
   const reviewsById = new Map(matched.map((r) => [r.id, r] as const));
   const averageRating = round1(matched.reduce((sum, r) => sum + r.rating, 0) / reviewCount);
 
-  const praise = findingsForSentiment(tags, "praise", reviewCount, reviewsById);
-  const faults = findingsForSentiment(tags, "fault", reviewCount, reviewsById);
+  const praise = findingsForSentiment(tags, "praise", reviewCount, reviewsById, unit);
+  const faults = findingsForSentiment(tags, "fault", reviewCount, reviewsById, unit);
 
   return {
     productName: product.name,
@@ -35,7 +35,15 @@ export function tagsToResult(
     to: input.to,
     reviewCount,
     averageRating,
-    summary: buildSummary(product, reviewCount, averageRating, praise, faults, unit),
+    summary: buildSummary(
+      product,
+      reviewCount,
+      averageRating,
+      praise,
+      faults,
+      unit,
+      matched.every((r) => r.date !== ""),
+    ),
     praise,
     faults,
     recommendations: [],
@@ -73,6 +81,7 @@ function findingsForSentiment(
   sentiment: "praise" | "fault",
   reviewCount: number,
   reviewsById: Map<string, Review>,
+  unit: DatasetUnit,
 ): Finding[] {
   const groups = new Map<string, Group>();
   for (const tag of tags) {
@@ -90,7 +99,7 @@ function findingsForSentiment(
   const findings: Finding[] = [];
   for (const group of groups.values()) {
     const mentions = group.reviewIds.size; // unique supporting reviews
-    if (mentions < MIN_EVIDENCE) continue; // same minimum-support threshold
+    if (mentions < minEvidenceFor(unit)) continue; // same per-unit threshold as the heuristic engine
     const representative = pickRepresentative(group.tags, reviewsById);
     findings.push({
       label: group.label,
