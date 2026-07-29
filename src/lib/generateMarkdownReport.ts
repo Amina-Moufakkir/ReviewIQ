@@ -1,5 +1,9 @@
 import type { AnalysisResult, Finding, PromotionInsight } from "../types";
 import { formatDate } from "./date";
+import type { DatasetUnit } from "./datasetInfo";
+
+/** Default unit: per-customer reviews, which is what sample and uploaded data are. */
+const REVIEW_UNIT: DatasetUnit = { one: "review", many: "reviews", isProductLevel: false };
 
 /** Today's date as a formatted label, using the shared date formatter. */
 function todayFormatted(): string {
@@ -22,11 +26,16 @@ function author(finding: Finding): string {
  * padding in a short report). Later findings that reuse it keep their evidence
  * but omit the duplicate quote.
  */
-function findingBlock(finding: Finding, reviewCount: number, seenQuotes: Set<string>): string {
+function findingBlock(
+  finding: Finding,
+  reviewCount: number,
+  unit: DatasetUnit,
+  seenQuotes: Set<string>,
+): string {
   const lines = [
     `### ${finding.label}`,
     "",
-    `- **Evidence:** ${finding.mentions} of ${reviewCount} selected reviews (${finding.percent}%)`,
+    `- **Evidence:** ${finding.mentions} of ${reviewCount} selected ${unit.many} (${finding.percent}%)`,
   ];
   const quoteKey = finding.quote.trim();
   if (quoteKey && !seenQuotes.has(quoteKey)) {
@@ -41,13 +50,14 @@ function findingsSection(
   heading: string,
   findings: Finding[],
   reviewCount: number,
+  unit: DatasetUnit,
   emptyFallback: string,
   seenQuotes: Set<string>,
 ): string {
   const body =
     findings.length === 0
       ? emptyFallback
-      : findings.map((f) => findingBlock(f, reviewCount, seenQuotes)).join("\n\n");
+      : findings.map((f) => findingBlock(f, reviewCount, unit, seenQuotes)).join("\n\n");
   return `## ${heading}\n\n${body}`;
 }
 
@@ -56,16 +66,34 @@ function findingsSection(
  * deterministic: it never reruns or reinterprets the analysis, and takes an
  * optional `generatedOn` label so tests do not depend on the current date.
  * When omitted, a sensible formatted current date is used.
+ *
+ * `unit` names what one analyzed row is. It defaults to per-customer reviews;
+ * pass the product-level unit for datasets whose rows are product listings, so
+ * the report never reports product records as if they were customers.
  */
-export function generateMarkdownReport(result: AnalysisResult, generatedOn?: string): string {
+export function generateMarkdownReport(
+  result: AnalysisResult,
+  generatedOn?: string,
+  unit: DatasetUnit = REVIEW_UNIT,
+): string {
   const generated = generatedOn ?? todayFormatted();
+  const dated = Boolean(result.from && result.to);
 
   const header = [
     `# ReviewIQ Report: ${result.productName}`,
     "",
-    `**Analysis window:** ${formatDate(result.from)} – ${formatDate(result.to)}  `,
-    `**Reviews analyzed:** ${result.reviewCount}  `,
+    ...(dated ? [`**Analysis window:** ${formatDate(result.from)} – ${formatDate(result.to)}  `] : []),
+    `**${capitalize(unit.many)} analyzed:** ${result.reviewCount}  `,
     `**Average rating:** ${result.averageRating.toFixed(1)}/5`,
+    ...(unit.isProductLevel
+      ? [
+          "",
+          "> Each analyzed row is a product record: a product listing whose text bundles several",
+          "> customers' reviews, whose star value is a product-average rounded to a whole star, and",
+          "> which carries no review date. Counts and percentages are shares of product records,",
+          "> not of customers.",
+        ]
+      : []),
   ].join("\n");
 
   const summary = `## Summary\n\n${result.summary}`;
@@ -79,6 +107,7 @@ export function generateMarkdownReport(result: AnalysisResult, generatedOn?: str
     "Top Strengths",
     result.praise,
     result.reviewCount,
+    unit,
     "No strengths met the evidence threshold in this analysis.",
     seenQuotes,
   );
@@ -87,6 +116,7 @@ export function generateMarkdownReport(result: AnalysisResult, generatedOn?: str
     "Top Issues",
     result.faults,
     result.reviewCount,
+    unit,
     "No issues met the evidence threshold in this analysis.",
     seenQuotes,
   );
@@ -105,6 +135,10 @@ export function generateMarkdownReport(result: AnalysisResult, generatedOn?: str
   sections.push(recommendations, footer);
 
   return sections.join("\n\n") + "\n";
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /** Markdown for the discounts/promotions insight, preserving its evidence. */

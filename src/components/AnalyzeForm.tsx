@@ -1,6 +1,7 @@
 import type { FormEvent } from "react";
 import type { Product, ReviewStats } from "../types";
 import { formatDate } from "../lib/date";
+import { formatCount, type DatasetUnit } from "../lib/datasetInfo";
 import { ProductSelect } from "./ProductSelect";
 import { DateRangePicker } from "./DateRangePicker";
 
@@ -9,8 +10,16 @@ interface AnalyzeFormProps {
   productId: string;
   from: string;
   to: string;
-  /** Sample-data context for the selected product, to guide range selection. */
-  sampleStats: ReviewStats;
+  /** Row count and available date span for the selected product. */
+  productStats: ReviewStats;
+  /** What one row of the active dataset is — a review, or a product record. */
+  unit: DatasetUnit;
+  /**
+   * Whether the dataset carries per-review dates. When false the window is
+   * hidden entirely rather than shown empty or filled with a stand-in range —
+   * the data simply has no dates to filter on.
+   */
+  hasDates: boolean;
   onProductChange: (productId: string) => void;
   onFromChange: (date: string) => void;
   onToChange: (date: string) => void;
@@ -24,15 +33,20 @@ export function AnalyzeForm({
   productId,
   from,
   to,
-  sampleStats,
+  productStats,
+  unit,
+  hasDates,
   onProductChange,
   onFromChange,
   onToChange,
   onSubmit,
   isLoading,
 }: AnalyzeFormProps) {
-  const rangeError = from && to && from > to ? "Start date must be on or before the end date." : "";
-  const canSubmit = Boolean(productId && from && to && !rangeError && !isLoading);
+  const rangeError =
+    hasDates && from && to && from > to ? "Start date must be on or before the end date." : "";
+  const canSubmit = Boolean(
+    productId && (!hasDates || (from && to)) && !rangeError && !isLoading,
+  );
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -52,22 +66,31 @@ export function AnalyzeForm({
             onChange={onProductChange}
             disabled={isLoading}
           />
-          {sampleStats.count > 0 ? (
+          {productStats.count > 0 ? (
             <p className="font-mono text-[11px] text-ink-soft">
-              Sample data · {sampleStats.count} reviews · {formatDate(sampleStats.from)} –{" "}
-              {formatDate(sampleStats.to)}
+              {formatCount(productStats.count, unit)}
+              {hasDates ? ` · ${formatDate(productStats.from)} – ${formatDate(productStats.to)}` : ""}
             </p>
           ) : null}
         </div>
 
-        <DateRangePicker
-          from={from}
-          to={to}
-          onFromChange={onFromChange}
-          onToChange={onToChange}
-          disabled={isLoading}
-          error={rangeError}
-        />
+        {/* No date window for undated data — there is nothing to filter on.
+            With no data loaded at all, neither the picker nor the note applies. */}
+        {hasDates ? (
+          <DateRangePicker
+            from={from}
+            to={to}
+            onFromChange={onFromChange}
+            onToChange={onToChange}
+            disabled={isLoading}
+            error={rangeError}
+          />
+        ) : products.length > 0 ? (
+          <p className="font-mono text-[11px] leading-relaxed text-ink-soft">
+            This dataset carries no review dates, so there is no window to select. Every{" "}
+            {unit.one} for the chosen product is analyzed.
+          </p>
+        ) : null}
 
         <button
           type="submit"
@@ -88,7 +111,7 @@ export function AnalyzeForm({
         </button>
 
         <p className="font-mono text-[11px] leading-relaxed text-ink-soft">
-          Prototype: Uses sample product reviews and deterministic analysis.
+          Prototype: deterministic analysis over the selected dataset.
         </p>
       </div>
     </form>

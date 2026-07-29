@@ -15,17 +15,61 @@ const REQUIRED_COLUMNS = [
   "product_id",
   "product_name",
   "category",
-  "review_date",
   "rating",
   "review_text",
 ] as const;
 
 // Optional columns are used when present but never required.
+//
+// `review_date` is one of them, and it is the only optional column that changes
+// how the dataset behaves rather than just what it carries:
+//   - present  → every row must hold a valid calendar date, exactly as before.
+//                Rows with a bad date are skipped.
+//   - absent   → the source has no per-review date at all. Every review gets
+//                `date: ""` and the dataset is UNDATED. It is all-or-nothing:
+//                a dataset never mixes dated and undated reviews, so the empty
+//                window ("" – "") the UI uses for undated data cannot silently
+//                exclude anyone. See Review.date in types.ts.
+
+/** Why a row was skipped. Keys are stable so callers can report per-reason counts. */
+export type SkipReason =
+  | "missing_review_id"
+  | "duplicate_review_id"
+  | "missing_product_id"
+  | "invalid_date"
+  | "invalid_rating"
+  | "missing_review_text";
 
 export interface ParseResult {
   dataset: Dataset;
   /** Rows that were dropped because they were invalid (bad date/rating/ids). */
   skipped: number;
+  /** How many rows each reason accounted for. Sums to `skipped`. */
+  skipReasons: Partial<Record<SkipReason, number>>;
+}
+
+/**
+ * What a load did with the rows it read, for honest reporting in the UI.
+ * The invariant `accepted + skipped === parsed` always holds: no row is
+ * silently discarded, and every skip is attributed to a reason.
+ */
+export interface LoadStats {
+  /** Data rows the CSV parser produced (header excluded). */
+  parsed: number;
+  accepted: number;
+  skipped: number;
+  skipReasons: Partial<Record<string, number>>;
+}
+
+/** Derive load stats from a ParseResult (`parsed` = accepted + skipped). */
+export function loadStatsFor(result: ParseResult): LoadStats {
+  const accepted = result.dataset.reviews.length;
+  return {
+    parsed: accepted + result.skipped,
+    accepted,
+    skipped: result.skipped,
+    skipReasons: result.skipReasons,
+  };
 }
 
 /**
@@ -35,6 +79,25 @@ export interface ParseResult {
  */
 export function parseReviewsCsv(text: string, label: string): ParseResult {
   const rows = parseCsv(text);
+  if (rows.length === 0) {
+    throw new CsvError("The file is empty.");
+  }
+  return buildDataset(rows, label, "uploaded");
+}
+
+/**
+ * Turn already-parsed CSV rows (header first) into a Dataset.
+ *
+ * Shared by `parseReviewsCsv` and the Amazon adapter so there is exactly ONE
+ * loader: one column contract, one row-validity rule, one skip counter. An
+ * adapter maps a foreign schema into these canonical columns and calls this —
+ * it never builds `Review` objects of its own.
+ */
+export function buildDataset(
+  rows: string[][],
+  label: string,
+  source: Dataset["source"],
+): ParseResult {
   if (rows.length === 0) {
     throw new CsvError("The file is empty.");
   }
@@ -51,33 +114,52 @@ export function parseReviewsCsv(text: string, label: string): ParseResult {
   }
 
   const cell = (row: string[], name: string): string => (row[index[name]!] ?? "").trim();
+  const hasDateColumn = "review_date" in index;
 
   const reviews: Review[] = [];
   const productMap = new Map<string, Product>();
   const seenIds = new Set<string>();
+  const skipReasons: Partial<Record<SkipReason, number>> = {};
   let skipped = 0;
+
+  const skip = (reason: SkipReason) => {
+    skipReasons[reason] = (skipReasons[reason] ?? 0) + 1;
+    skipped++;
+  };
 
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r]!;
     const id = cell(row, "review_id");
     const productId = cell(row, "product_id");
-    const date = cell(row, "review_date");
+    // Undated sources carry "" — never a stand-in date. See the note above.
+    const date = hasDateColumn ? cell(row, "review_date") : "";
     const ratingRaw = cell(row, "rating");
     const textVal = cell(row, "review_text");
     const rating = Number(ratingRaw);
 
-    const valid =
-      id &&
-      !seenIds.has(id) &&
-      productId &&
-      isValidIsoDate(date) &&
-      Number.isInteger(rating) &&
-      rating >= 1 &&
-      rating <= 5 &&
-      textVal;
-
-    if (!valid) {
-      skipped++;
+    // Checked in a fixed order so one row always yields the same first reason.
+    if (!id) {
+      skip("missing_review_id");
+      continue;
+    }
+    if (seenIds.has(id)) {
+      skip("duplicate_review_id");
+      continue;
+    }
+    if (!productId) {
+      skip("missing_product_id");
+      continue;
+    }
+    if (hasDateColumn && !isValidIsoDate(date)) {
+      skip("invalid_date");
+      continue;
+    }
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      skip("invalid_rating");
+      continue;
+    }
+    if (!textVal) {
+      skip("missing_review_text");
       continue;
     }
     seenIds.add(id);
@@ -109,8 +191,9 @@ export function parseReviewsCsv(text: string, label: string): ParseResult {
 
   const products = [...productMap.values()].sort((a, b) => a.name.localeCompare(b.name));
   return {
-    dataset: { products, reviews, source: "uploaded", label },
+    dataset: { products, reviews, source, label },
     skipped,
+    skipReasons,
   };
 }
 

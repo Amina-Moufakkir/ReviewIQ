@@ -1,15 +1,27 @@
 import type { Finding } from "../types";
+import type { DatasetUnit } from "../lib/datasetInfo";
 
 interface SentimentColumnProps {
   tone: "praise" | "fault";
   title: string;
   findings: Finding[];
-  /** Total matched reviews, for the "X of N reviews" evidence line. */
+  /** Total matched rows, for the "X of N selected" evidence line. */
   reviewCount: number;
+  /** What one analyzed row is — a review, or a product record. */
+  unit: DatasetUnit;
+  /** Whether the analyzed dataset carried per-review dates. */
+  hasDates: boolean;
 }
 
 /** One side of the balance-of-opinion ledger: evidence-backed findings. */
-export function SentimentColumn({ tone, title, findings, reviewCount }: SentimentColumnProps) {
+export function SentimentColumn({
+  tone,
+  title,
+  findings,
+  reviewCount,
+  unit,
+  hasDates,
+}: SentimentColumnProps) {
   const isPraise = tone === "praise";
   const accent = isPraise ? "text-praise" : "text-fault";
   const topBorder = isPraise ? "border-t-praise" : "border-t-fault";
@@ -27,7 +39,8 @@ export function SentimentColumn({ tone, title, findings, reviewCount }: Sentimen
 
       {findings.length === 0 ? (
         <p className="text-sm text-ink-soft">
-          No {isPraise ? "positive" : "negative"} themes have enough evidence in this window.
+          No {isPraise ? "positive" : "negative"} themes have enough evidence
+          {hasDates ? " in this window" : ` in these ${unit.many}`}.
         </p>
       ) : (
         <ul className="flex flex-col gap-5">
@@ -40,8 +53,8 @@ export function SentimentColumn({ tone, title, findings, reviewCount }: Sentimen
                 <span className="text-sm font-medium text-ink">{f.label}</span>
               </div>
               <p className="font-mono text-[11px] text-ink-soft">
-                Mentioned in {f.mentions} of {reviewCount} selected review
-                {reviewCount === 1 ? "" : "s"} · {f.percent}%
+                Mentioned in {f.mentions} of {reviewCount} selected{" "}
+                {reviewCount === 1 ? unit.one : unit.many} · {f.percent}%
               </p>
               <blockquote className="border-l border-rule pl-3">
                 <p className="text-sm italic leading-relaxed text-ink">“{f.quote}”</p>

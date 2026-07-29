@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AnalysisResult, Finding } from "../types";
 import { formatDate } from "../lib/date";
+import { formatCount, type DatasetUnit } from "../lib/datasetInfo";
 import { generateMarkdownReport } from "../lib/generateMarkdownReport";
 import { copyReportToClipboard } from "../lib/copyReport";
 import { SectionLabel } from "./SectionLabel";
@@ -9,12 +10,16 @@ import { PromotionPanel } from "./PromotionPanel";
 
 interface ResultsViewProps {
   result: AnalysisResult;
+  /** What one analyzed row is — a review, or a product record. */
+  unit: DatasetUnit;
+  /** Whether the analyzed dataset carried per-review dates. */
+  hasDates: boolean;
 }
 
 type Toast = { message: string; tone: "success" | "error" };
 
 /** The full sentiment brief: findings lede, ledger, themes, recommendations. */
-export function ResultsView({ result }: ResultsViewProps) {
+export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
   // Combined at-a-glance theme list, most-mentioned first.
   const themes: Finding[] = [...result.praise, ...result.faults].sort(
     (a, b) => b.mentions - a.mentions || a.label.localeCompare(b.label),
@@ -32,7 +37,7 @@ export function ResultsView({ result }: ResultsViewProps) {
 
   async function handleCopyReport() {
     try {
-      await copyReportToClipboard(generateMarkdownReport(result));
+      await copyReportToClipboard(generateMarkdownReport(result, undefined, unit));
       setToast({ message: "Report copied", tone: "success" });
     } catch {
       setToast({ message: "Could not copy report", tone: "error" });
@@ -82,12 +87,25 @@ export function ResultsView({ result }: ResultsViewProps) {
           {result.productName}
         </h2>
         <p className="mt-3 font-mono text-xs text-ink-soft">
-          {result.reviewCount} review{result.reviewCount === 1 ? "" : "s"} ·{" "}
-          {result.averageRating.toFixed(1)}★ avg · {formatDate(result.from)} – {formatDate(result.to)}
+          {formatCount(result.reviewCount, unit)} · {result.averageRating.toFixed(1)}★ avg
+          {hasDates ? ` · ${formatDate(result.from)} – ${formatDate(result.to)}` : ""}
         </p>
         <p className="mt-4 max-w-2xl font-display text-lg leading-relaxed text-ink">
           {result.summary}
         </p>
+        {/* The engine's own summary wording is fixed, and for product-level
+            data it would overstate what was counted — so the caveat sits
+            beside it rather than silently rewriting the engine's output. */}
+        {unit.isProductLevel ? (
+          <p className="mt-3 max-w-2xl text-[13px] leading-relaxed text-ink-soft">
+            Read "reviews" above as <span className="font-medium">product records</span>: each one is
+            a product listing whose text bundles several customers' reviews and whose star value is a
+            product-average rounded to a whole star. Counts and percentages are shares of product
+            records, not of customers
+            {hasDates ? "" : ', and "this window" is the whole dataset — these records carry no dates'}
+            .
+          </p>
+        ) : null}
       </header>
 
       {/* Signature: the balance of opinion, weighed in two columns. */}
@@ -99,12 +117,16 @@ export function ResultsView({ result }: ResultsViewProps) {
             title="What they praise"
             findings={result.praise}
             reviewCount={result.reviewCount}
+            unit={unit}
+            hasDates={hasDates}
           />
           <SentimentColumn
             tone="fault"
             title="What they fault"
             findings={result.faults}
             reviewCount={result.reviewCount}
+            unit={unit}
+            hasDates={hasDates}
           />
         </div>
       </div>
@@ -116,7 +138,9 @@ export function ResultsView({ result }: ResultsViewProps) {
       <div>
         <SectionLabel>Recurring themes</SectionLabel>
         {themes.length === 0 ? (
-          <p className="text-sm text-ink-soft">No recurring themes surfaced in this window.</p>
+          <p className="text-sm text-ink-soft">
+            No recurring themes surfaced{hasDates ? " in this window" : ` in these ${unit.many}`}.
+          </p>
         ) : (
           <ul className="flex flex-wrap gap-2">
             {themes.map((theme) => (
@@ -148,7 +172,8 @@ export function ResultsView({ result }: ResultsViewProps) {
         <SectionLabel>Recommended actions</SectionLabel>
         {result.recommendations.length === 0 ? (
           <p className="text-sm text-ink-soft">
-            No actions recommended — no recurring complaints in this window.
+            No actions recommended — no recurring complaints
+            {hasDates ? " in this window" : ` in these ${unit.many}`}.
           </p>
         ) : (
           <ol className="border-y border-rule">

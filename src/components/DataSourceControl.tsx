@@ -1,24 +1,31 @@
 import type { ChangeEvent } from "react";
 import type { Dataset } from "../types";
+import type { LoadStats } from "../lib/parseReviews";
+import { formatCount, type DatasetUnit } from "../lib/datasetInfo";
 
 interface DataSourceControlProps {
   dataset: Dataset;
   isParsing: boolean;
   error: string;
-  /** Rows dropped as invalid on the last successful upload (0 when none). */
-  skipped: number;
+  /** What the last load read, accepted and skipped. Null for the built-in sample. */
+  stats: LoadStats | null;
+  /** What one row of the active dataset is — a review, or a product record. */
+  unit: DatasetUnit;
   onFile: (file: File) => void;
+  onLoadAmazon: () => void;
   onLoadSampleCsv: () => void;
   onUseBuiltIn: () => void;
 }
 
-/** Choose the review dataset: built-in sample, bundled CSV, or an upload. */
+/** Choose the review dataset: Amazon product records, the sample, or an upload. */
 export function DataSourceControl({
   dataset,
   isParsing,
   error,
-  skipped,
+  stats,
+  unit,
   onFile,
+  onLoadAmazon,
   onLoadSampleCsv,
   onUseBuiltIn,
 }: DataSourceControlProps) {
@@ -42,7 +49,8 @@ export function DataSourceControl({
         <p className="text-sm text-ink">
           Using <span className="font-medium">{dataset.label}</span>
           <span className="text-ink-soft">
-            {" "}· {dataset.reviews.length} reviews · {dataset.products.length} product
+            {" "}· {formatCount(dataset.reviews.length, unit)} ·{" "}
+            {dataset.products.length.toLocaleString()} product
             {dataset.products.length === 1 ? "" : "s"}
           </span>
         </p>
@@ -60,6 +68,12 @@ export function DataSourceControl({
             />
           </label>
 
+          {dataset.source !== "amazon" ? (
+            <button type="button" className={linkClass} disabled={isParsing} onClick={onLoadAmazon}>
+              Amazon dataset
+            </button>
+          ) : null}
+
           {dataset.source === "sample" ? (
             <button type="button" className={linkClass} disabled={isParsing} onClick={onLoadSampleCsv}>
               Load 204-review sample
@@ -71,6 +85,15 @@ export function DataSourceControl({
           )}
         </div>
       </div>
+
+      {/* What this data actually is — stated wherever it is selected. */}
+      {!isParsing && !error && unit.isProductLevel ? (
+        <p className="mt-3 text-[13px] leading-relaxed text-ink-soft">
+          Each row is one product listing, not one customer. It carries a product-average rating and
+          several customers' reviews concatenated into a single block of text, with no review dates —
+          so counts below are counts of product records.
+        </p>
+      ) : null}
 
       {isParsing ? (
         <p className="mt-3 flex items-center gap-2 font-mono text-[11px] text-ink-soft" role="status">
@@ -88,11 +111,24 @@ export function DataSourceControl({
         </p>
       ) : null}
 
-      {!error && !isParsing && skipped > 0 ? (
-        <p className="mt-3 font-mono text-[11px] text-ink-soft">
-          Loaded successfully. Skipped {skipped} invalid row{skipped === 1 ? "" : "s"}.
+      {/* Full accounting: every row read is either accepted or attributed to a
+          skip reason. Nothing is discarded silently. */}
+      {!error && !isParsing && stats ? (
+        <p className="mt-3 font-mono text-[11px] leading-relaxed text-ink-soft">
+          {stats.parsed.toLocaleString()} parsed · {stats.accepted.toLocaleString()} accepted ·{" "}
+          {stats.skipped.toLocaleString()} skipped
+          {stats.skipped > 0 ? ` (${formatSkipReasons(stats.skipReasons)})` : ""}
         </p>
       ) : null}
     </div>
   );
+}
+
+/** "invalid rating 1, duplicate review id 2" — reasons in descending count. */
+function formatSkipReasons(reasons: Partial<Record<string, number>>): string {
+  return Object.entries(reasons)
+    .filter((entry): entry is [string, number] => Boolean(entry[1]))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([reason, count]) => `${reason.replace(/_/g, " ")} ${count.toLocaleString()}`)
+    .join(", ");
 }

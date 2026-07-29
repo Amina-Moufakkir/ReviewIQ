@@ -1,0 +1,13 @@
+product_id,product_name,category,discounted_price,actual_price,discount_percentage,rating,rating_count,review_content
+SYN0000001,Northwind Braided USB-C Cable 1m,Computers&Accessories|Accessories&Peripherals|Cables&Accessories|Cables|USBCables,₹399,"₹1,099",64%,4.2,"24,269","Charging is fast, and the braid feels solid.,Held up better than the cable it replaced.,Good value for money, would buy again."
+SYN0000001,Northwind Braided USB-C Cable 1m,Computers&Accessories|Accessories&Peripherals|Cables&Accessories|Cables|USBCables,₹449,"₹1,099",59%,4.1,"24,270","Charging speed is fine but the cable is shorter than I expected.,Build quality is good."
+SYN0000002,Kestrel 1.5L Electric Kettle,Home&Kitchen|Kitchen&HomeAppliances|SmallKitchenAppliances|Kettles,₹1249,"₹2,499",50%,3.9,"7,928","Boils quickly and the handle stays cool.,The lid is stiff, I have to force it open every time."
+SYN0000003,Halcyon Wireless Mouse,Computers&Accessories|Accessories&Peripherals|Mice,₹699,"₹1,299",46%,3.4,"1,204","Battery life is poor — dead in three weeks.,Tracking is accurate on most surfaces though."
+SYN0000004,Meridian 65W Fast Charger,Electronics|Mobiles&Accessories|Chargers,₹899,"₹1,499",40%,2.4,918,"Stopped working after a month. Very disappointing.,Ran hot enough that I stopped using it."
+SYN0000005,Alder Sandwich Press,Home&Kitchen|Kitchen&HomeAppliances|SmallKitchenAppliances|SandwichMakers,"₹1,899","₹2,999",37%,4.6,"3,410","Does its job perfectly. Only issue is that temperature control is not precise.,Easy to clean, ""non-stick"" really is non-stick."
+SYN0000006,Corvus Desk Lamp,Home&Kitchen|HomeDecor|Lighting,₹1099,"₹1,499",27%,3.5,442,"Light is even and glare-free.,The base wobbles on an uneven desk."
+SYN0000007,Pike Bluetooth Speaker,Electronics|HomeAudio|Speakers,₹2499,"₹4,999",50%,4.0,"12,003","Sound quality is excellent for the size.,Pairing was painless."
+SYN0000008,Tarn Insulated Bottle 750ml,Home&Kitchen|Kitchen&Dining|Drinkware,₹749,₹999,25%,,"2,110","Keeps drinks cold all day.,The cap leaked on the first trip."
+SYN0000009,Vale Laptop Stand,OfficeProducts|OfficeElectronics|Accessories,₹1599,"₹2,199",27%,|,876,"Sturdy and lifts the screen to a comfortable height."
+SYN0000010,Rowan Mechanical Keyboard,Computers&Accessories|Accessories&Peripherals|Keyboards,₹4499,"₹6,999",36%,4.4,"5,671",""
+,Wren Cable Organiser,Computers&Accessories|Accessories&Peripherals|CableManagement,₹299,₹499,40%,4.0,320,"Keeps the desk tidy, does exactly what it says."

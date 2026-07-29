@@ -10,10 +10,22 @@ export interface Product {
 export interface Review {
   id: string;
   productId: string;
-  /** ISO date string, e.g. "2026-03-14". */
+  /**
+   * ISO date string, e.g. "2026-03-14", or `""` when the source carries no
+   * per-review date. `""` is a deliberate "no date" marker, never a stand-in
+   * for an unknown one — a dataset is either fully dated or fully undated, and
+   * the UI hides the date window entirely for undated data.
+   */
   date: string;
   /** 1–5 stars. */
   rating: number;
+  /**
+   * The rating exactly as the source recorded it, kept when `rating` had to be
+   * rounded to satisfy the 1–5 integer contract (Amazon ships product-average
+   * ratings such as 4.2). Present only when the two differ in origin; it is
+   * never used for analysis, only for display and validation.
+   */
+  sourceRating?: number;
   text: string;
   /** Optional review title (present in uploaded CSV data). */
   title?: string;
@@ -38,7 +50,12 @@ export interface Review {
 export interface Dataset {
   products: Product[];
   reviews: Review[];
-  source: "sample" | "uploaded";
+  /**
+   * Where the data came from. "amazon" is the real Amazon product dataset, whose
+   * rows are PRODUCT RECORDS — one row is a product listing carrying an average
+   * rating and several customers' reviews concatenated, not one customer review.
+   */
+  source: "sample" | "uploaded" | "amazon";
   /** Human label for the active source, e.g. "Built-in sample" or a filename. */
   label: string;
 }

@@ -1,55 +1,132 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Dataset, Review } from "./types";
 import { sampleDataset } from "./data/sampleDataset";
 import { reviewStatsFor } from "./services/analysisEngine";
-import { parseReviewsCsv, CsvError } from "./lib/parseReviews";
+import { parseReviewsCsv, loadStatsFor, CsvError, type LoadStats } from "./lib/parseReviews";
+import { adaptAmazonCsv } from "./lib/amazonAdapter";
+import { AMAZON_DATASET_FILE, AMAZON_DATASET_LABEL, hasDates, unitFor } from "./lib/datasetInfo";
 import { useAnalysis } from "./hooks/useAnalysis";
 import { AnalyzeForm } from "./components/AnalyzeForm";
 import { DataSourceControl } from "./components/DataSourceControl";
 import { ResultsView } from "./components/ResultsView";
 import { StateMessage } from "./components/StateMessage";
 
-/** Earliest and latest review dates in a dataset, for default range fitting. */
+/**
+ * Earliest and latest review dates in a dataset, for default range fitting.
+ * An undated dataset (every `date` is "") yields an empty span — which is
+ * exactly the window that matches every undated review, since the engines
+ * filter with `date >= from && date <= to`.
+ */
 function datasetSpan(reviews: Review[]): { from: string; to: string } {
   const dates = reviews.map((r) => r.date).sort();
   return { from: dates[0] ?? "", to: dates[dates.length - 1] ?? "" };
 }
 
-const INITIAL_SPAN = datasetSpan(sampleDataset.reviews);
+/** The dataset shown before the Amazon fixture finishes loading. */
+const EMPTY_DATASET: Dataset = {
+  products: [],
+  reviews: [],
+  source: "amazon",
+  label: AMAZON_DATASET_LABEL,
+};
+
+/**
+ * Fetch and adapt the Amazon fixture. Kept outside the component (and free of
+ * state) so the mount effect and the manual reload share one implementation.
+ *
+ * The fixture is developer-supplied and not committed, so a missing file is an
+ * expected setup state, not a crash — it gets a message that says how to fix
+ * it. A dev server answering an unknown path with the SPA's index.html looks
+ * like a 200 of HTML, so that counts as missing too.
+ */
+async function fetchAmazonDataset() {
+  const res = await fetch(`${import.meta.env.BASE_URL}${AMAZON_DATASET_FILE}`);
+  const servedHtml = (res.headers.get("content-type") ?? "").includes("text/html");
+  if (!res.ok || servedHtml) throw new CsvError(MISSING_DATASET_MESSAGE);
+  return adaptAmazonCsv(await res.text(), AMAZON_DATASET_LABEL);
+}
+
+const MISSING_DATASET_MESSAGE =
+  `The Amazon dataset is not available. It is supplied locally rather than committed — ` +
+  `see "Amazon dataset" in the README, then run \`npm run build:amazon\`. ` +
+  `You can use the built-in sample in the meantime.`;
+
+/** User-facing message for a failed dataset load, without leaking internals. */
+function loadErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof CsvError ? err.message : fallback;
+}
 
 export default function App() {
-  const [dataset, setDataset] = useState<Dataset>(sampleDataset);
-  const [productId, setProductId] = useState(sampleDataset.products[0]?.id ?? "");
-  const [from, setFrom] = useState(INITIAL_SPAN.from);
-  const [to, setTo] = useState(INITIAL_SPAN.to);
+  const [dataset, setDataset] = useState<Dataset>(EMPTY_DATASET);
+  const [productId, setProductId] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const { state, analyze, reset } = useAnalysis();
 
-  const [isParsing, setIsParsing] = useState(false);
+  const [isParsing, setIsParsing] = useState(true);
   const [parseError, setParseError] = useState("");
-  const [skipped, setSkipped] = useState(0);
+  const [stats, setStats] = useState<LoadStats | null>(null);
 
-  const sampleStats = reviewStatsFor(productId, dataset.reviews);
+  const productStats = reviewStatsFor(productId, dataset.reviews);
+  const dated = hasDates(dataset);
+  const unit = unitFor(dataset);
 
   // Switch the active dataset: reset the product, fit the date range to it,
   // and clear any previous analysis.
-  function applyDataset(next: Dataset, droppedRows: number) {
-    const span = datasetSpan(next.reviews);
-    setDataset(next);
-    setProductId(next.products[0]?.id ?? "");
-    setFrom(span.from);
-    setTo(span.to);
-    setSkipped(droppedRows);
+  const applyDataset = useCallback(
+    (next: Dataset, loadStats: LoadStats | null) => {
+      const span = datasetSpan(next.reviews);
+      setDataset(next);
+      setProductId(next.products[0]?.id ?? "");
+      setFrom(span.from);
+      setTo(span.to);
+      setStats(loadStats);
+      setParseError("");
+      reset();
+    },
+    [reset],
+  );
+
+  async function handleLoadAmazon() {
+    setIsParsing(true);
     setParseError("");
-    reset();
+    try {
+      const { dataset: next, stats: loadStats } = await fetchAmazonDataset();
+      applyDataset(next, loadStats);
+    } catch (err) {
+      setParseError(loadErrorMessage(err, "Could not load the Amazon dataset."));
+    } finally {
+      setIsParsing(false);
+    }
   }
+
+  // The Amazon dataset is the default: load it once on mount. `isParsing`
+  // already starts true, so the effect touches state only after the fetch
+  // resolves — never synchronously during the effect body.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { dataset: next, stats: loadStats } = await fetchAmazonDataset();
+        if (!cancelled) applyDataset(next, loadStats);
+      } catch (err) {
+        if (!cancelled) setParseError(loadErrorMessage(err, "Could not load the Amazon dataset."));
+      } finally {
+        if (!cancelled) setIsParsing(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyDataset]);
 
   async function handleFile(file: File) {
     setIsParsing(true);
     setParseError("");
     try {
       const text = await file.text();
-      const { dataset: next, skipped: dropped } = parseReviewsCsv(text, file.name);
-      applyDataset(next, dropped);
+      const result = parseReviewsCsv(text, file.name);
+      applyDataset(result.dataset, loadStatsFor(result));
     } catch (err) {
       setParseError(err instanceof CsvError ? err.message : "Could not read the file.");
     } finally {
@@ -64,8 +141,8 @@ export default function App() {
       const res = await fetch(`${import.meta.env.BASE_URL}sample-reviews.csv`);
       if (!res.ok) throw new CsvError(`Could not load the sample file (HTTP ${res.status}).`);
       const text = await res.text();
-      const { dataset: next, skipped: dropped } = parseReviewsCsv(text, "sample-reviews.csv");
-      applyDataset(next, dropped);
+      const result = parseReviewsCsv(text, "sample-reviews.csv");
+      applyDataset(result.dataset, loadStatsFor(result));
     } catch (err) {
       setParseError(err instanceof CsvError ? err.message : "Could not load the sample file.");
     } finally {
@@ -74,7 +151,7 @@ export default function App() {
   }
 
   function handleUseBuiltIn() {
-    applyDataset(sampleDataset, 0);
+    applyDataset(sampleDataset, null);
   }
 
   return (
@@ -96,8 +173,8 @@ export default function App() {
             What are customers really saying about your products?
           </h1>
           <p className="mt-4 max-w-xl text-sm leading-relaxed text-ink-soft">
-            Upload your reviews or use the sample. Pick a product and a window, and ReviewIQ reports
-            what customers praise, what they fault, and what to do next.
+            Analyze the Amazon product dataset, upload your own reviews, or use the sample. Pick a
+            product and ReviewIQ reports what customers praise, what they fault, and what to do next.
           </p>
         </header>
 
@@ -106,8 +183,10 @@ export default function App() {
             dataset={dataset}
             isParsing={isParsing}
             error={parseError}
-            skipped={skipped}
+            stats={stats}
+            unit={unit}
             onFile={handleFile}
+            onLoadAmazon={handleLoadAmazon}
             onLoadSampleCsv={handleLoadSampleCsv}
             onUseBuiltIn={handleUseBuiltIn}
           />
@@ -117,7 +196,9 @@ export default function App() {
             productId={productId}
             from={from}
             to={to}
-            sampleStats={sampleStats}
+            productStats={productStats}
+            unit={unit}
+            hasDates={dated}
             onProductChange={setProductId}
             onFromChange={setFrom}
             onToChange={setTo}
@@ -131,23 +212,27 @@ export default function App() {
               <StateMessage
                 tone="idle"
                 title="Awaiting your query"
-                description="Choose a product and window above, then run the analysis."
+                description={`Choose a product${dated ? " and window" : ""} above, then run the analysis.`}
               />
             ) : null}
 
             {state.status === "loading" ? (
               <StateMessage
                 tone="loading"
-                title="Reading reviews…"
-                description="Weighing customer feedback across the selected window."
+                title={`Reading ${unit.many}…`}
+                description="Weighing customer feedback across the current selection."
               />
             ) : null}
 
             {state.status === "empty" ? (
               <StateMessage
                 tone="empty"
-                title="No reviews in this window"
-                description={`Nothing was written about ${state.result.productName} between these dates. Try widening the window.`}
+                title={`No ${unit.many} to analyze`}
+                description={
+                  dated
+                    ? `Nothing was written about ${state.result.productName} between these dates. Try widening the window.`
+                    : `There is nothing to analyze for ${state.result.productName}.`
+                }
               />
             ) : null}
 
@@ -155,13 +240,15 @@ export default function App() {
               <StateMessage tone="error" title="Analysis failed" description={state.message} />
             ) : null}
 
-            {state.status === "success" ? <ResultsView result={state.result} /> : null}
+            {state.status === "success" ? (
+              <ResultsView result={state.result} unit={unit} hasDates={dated} />
+            ) : null}
           </div>
         </div>
 
         <footer className="mt-16 border-t border-rule pt-4">
           <p className="font-mono text-[11px] uppercase leading-relaxed tracking-[0.15em] text-ink-soft">
-            ReviewIQ · MVP · Heuristic, rating-assisted analysis over sample or uploaded data
+            ReviewIQ · MVP · Heuristic, rating-assisted analysis over Amazon, sample or uploaded data
           </p>
         </footer>
       </div>
