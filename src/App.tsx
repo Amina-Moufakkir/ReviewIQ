@@ -7,6 +7,8 @@ import { adaptAmazonCsv } from "./lib/amazonAdapter";
 import {
   AMAZON_DATASET_FILE,
   AMAZON_DATASET_LABEL,
+  AMAZON_DEMO_FILE,
+  AMAZON_DEMO_LABEL,
   SAMPLE_CSV_FILE,
   hasDates,
   unitFor,
@@ -26,8 +28,8 @@ interface LoadedDataset {
 const AMAZON_LOAD_ERROR = "Could not load the Amazon dataset.";
 
 const MISSING_DATASET_MESSAGE =
-  `The Amazon dataset is not available. It is supplied locally rather than committed — ` +
-  `see "Amazon dataset" in the README, then run \`npm run build:amazon\`. ` +
+  `No Amazon data is available — neither the generated dataset nor the bundled ` +
+  `demo fixture could be loaded. See "Amazon dataset" in the README. ` +
   `You can use the built-in sample in the meantime.`;
 
 /**
@@ -60,17 +62,41 @@ function publicUrl(file: string): string {
 // manual reload share a single implementation.
 
 /**
- * The Amazon fixture is developer-supplied and not committed, so a missing file
- * is an expected setup state, not a crash — it gets a message saying how to fix
- * it. A dev server answering an unknown path with the SPA's index.html looks
- * like a 200 of HTML, so that counts as missing too.
+ * The Amazon source, in order of preference:
+ *
+ *   1. `public/amazon-products.csv` — the real dataset, generated locally by
+ *      `npm run build:amazon`. Not committed, so only a developer who has
+ *      downloaded the source has it.
+ *   2. `public/amazon-demo.csv` — a committed, fully synthetic stand-in in the
+ *      same column shape. This is what deployed builds get.
+ *
+ * The fallback is deliberately to synthetic *Amazon-shaped* data, never to the
+ * ordinary review sample: a visitor exploring the Amazon path must actually be
+ * exercising the Amazon adapter, not a different dataset wearing its name. The
+ * label says "synthetic" so the two are never confused.
  */
 async function fetchAmazonDataset(): Promise<LoadedDataset> {
-  const res = await fetch(publicUrl(AMAZON_DATASET_FILE));
-  const servedHtml = (res.headers.get("content-type") ?? "").includes("text/html");
-  if (!res.ok || servedHtml) throw new CsvError(MISSING_DATASET_MESSAGE);
-  const { dataset, stats } = adaptAmazonCsv(await res.text(), AMAZON_DATASET_LABEL);
+  const real = await fetchCsv(AMAZON_DATASET_FILE);
+  const text = real ?? (await fetchCsv(AMAZON_DEMO_FILE));
+  if (text === null) throw new CsvError(MISSING_DATASET_MESSAGE);
+
+  const { dataset, stats } = adaptAmazonCsv(
+    text,
+    real ? AMAZON_DATASET_LABEL : AMAZON_DEMO_LABEL,
+  );
   return { dataset, stats };
+}
+
+/**
+ * Fetch a CSV from public/, or `null` when it is not there. A dev server
+ * answering an unknown path with the SPA's index.html looks like a 200 of
+ * HTML, so that counts as absent too.
+ */
+async function fetchCsv(file: string): Promise<string | null> {
+  const res = await fetch(publicUrl(file));
+  const servedHtml = (res.headers.get("content-type") ?? "").includes("text/html");
+  if (!res.ok || servedHtml) return null;
+  return res.text();
 }
 
 async function fetchSampleCsv(): Promise<LoadedDataset> {

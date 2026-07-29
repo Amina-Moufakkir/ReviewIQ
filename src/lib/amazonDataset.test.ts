@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import { adaptAmazonCsv, type AmazonAdapterResult } from "./amazonAdapter";
-import { hasDates } from "./datasetInfo";
+import { hasDates, isSyntheticDemo, AMAZON_DEMO_LABEL } from "./datasetInfo";
+import { shortProductLabel } from "./productLabel";
 import { analyze } from "../services/analysisEngine";
 import {
   parseReviewRequest,
@@ -21,9 +22,11 @@ import {
  */
 
 const MINI_PATH = new URL("../test/fixtures/amazon-mini.csv", import.meta.url);
+const DEMO_PATH = new URL("../../public/amazon-demo.csv", import.meta.url);
 const REAL_PATH = new URL("../../public/amazon-products.csv", import.meta.url);
 
 const mini = adaptAmazonCsv(readFileSync(MINI_PATH, "utf8"), "Synthetic mini fixture");
+const demo = adaptAmazonCsv(readFileSync(DEMO_PATH, "utf8"), AMAZON_DEMO_LABEL);
 const hasRealFixture = existsSync(REAL_PATH);
 
 /**
@@ -119,8 +122,46 @@ function assertAdapterInvariants(name: string, result: AmazonAdapterResult) {
   });
 }
 
-describe("Amazon adapter — invariants (synthetic fixture)", () => {
+describe("Amazon adapter — invariants (synthetic fixtures)", () => {
   assertAdapterInvariants("mini", mini);
+  assertAdapterInvariants("demo", demo);
+});
+
+/**
+ * public/amazon-demo.csv is a shipped artifact: deployed builds have no real
+ * dataset, so this is the Amazon data every visitor sees. It is committed, so
+ * these assertions guard what the public demo actually shows.
+ */
+describe("Amazon demo fixture — the deployed stand-in", () => {
+  it("is labelled as synthetic wherever the UI reads it", () => {
+    expect(isSyntheticDemo(demo.dataset)).toBe(true);
+    expect(demo.dataset.label).toContain("synthetic");
+  });
+
+  it("carries enough products, across enough categories, to be worth exploring", () => {
+    expect(demo.dataset.products.length).toBeGreaterThanOrEqual(20);
+    const topLevel = new Set(demo.records.map((r) => r.categoryPath[0]));
+    expect(topLevel.size).toBeGreaterThanOrEqual(4);
+  });
+
+  it("demonstrates the skip accounting rather than hiding it", () => {
+    expect(demo.stats.skipped).toBeGreaterThan(0);
+    expect(demo.stats.accepted + demo.stats.skipped).toBe(demo.stats.parsed);
+  });
+
+  it("contains titles long enough to show the selector shortening", () => {
+    const shortened = demo.dataset.products.filter(
+      (p) => shortProductLabel(p.name) !== p.name,
+    );
+    expect(shortened.length).toBeGreaterThanOrEqual(15);
+  });
+
+  it("ships no reviewer ids or names, and no real product ids", () => {
+    const csv = readFileSync(DEMO_PATH, "utf8");
+    expect(csv.slice(0, csv.indexOf("\n"))).not.toMatch(/user_id|user_name|review_id|review_title/);
+    // Real Amazon ASINs look like B0XXXXXXXX; every id here is invented.
+    expect(demo.records.every((r) => r.productId.startsWith("DEMO"))).toBe(true);
+  });
 });
 
 describe("Amazon adapter — synthetic fixture specifics", () => {

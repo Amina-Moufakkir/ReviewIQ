@@ -1,7 +1,7 @@
 import type { ChangeEvent } from "react";
 import type { Dataset } from "../types";
 import type { LoadStats } from "../lib/parseReviews";
-import { formatCount, type DatasetUnit } from "../lib/datasetInfo";
+import { formatCount, isSyntheticDemo, type DatasetUnit } from "../lib/datasetInfo";
 
 interface DataSourceControlProps {
   dataset: Dataset;
@@ -90,6 +90,15 @@ export function DataSourceControl({
       {/* What this data actually is — stated wherever it is selected. */}
       {!isLoadingDataset && !error && unit.isProductLevel ? (
         <p className="mt-3 text-[13px] leading-relaxed text-ink-soft">
+          {isSyntheticDemo(dataset) ? (
+            <>
+              <span className="font-medium text-ink">
+                These records are invented, not real customer feedback.
+              </span>{" "}
+              The real Amazon dataset is not redistributed here, so this synthetic stand-in takes its
+              place and exercises the same path.{" "}
+            </>
+          ) : null}
           Each row is one product listing, not one customer. It carries a product-average rating and
           several customers' reviews concatenated into a single block of text, with no review dates —
           so counts below are counts of product records.
