@@ -92,15 +92,14 @@ export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
         <p className="mt-4 max-w-2xl font-display text-lg leading-relaxed text-ink">
           {result.summary}
         </p>
-        {/* The engine's own summary wording is fixed, and for product-level
-            data it would overstate what was counted — so the caveat sits
-            beside it rather than silently rewriting the engine's output. */}
+        {/* The summary now names the unit itself, so this no longer glosses a
+            wrong noun. What it still has to say is what a product record IS —
+            wording alone cannot carry that. */}
         {unit.isProductLevel ? (
           <p className="mt-3 max-w-2xl text-[13px] leading-relaxed text-ink-soft">
-            Read "reviews" above as <span className="font-medium">product records</span>: each one is
-            a product listing whose text bundles several customers' reviews and whose star value is a
-            product-average rounded to a whole star. Counts and percentages are shares of product
-            records, not of customers
+            Each <span className="font-medium">product record</span> is a product listing whose text
+            bundles several customers' reviews and whose star value is a product-average rounded to a
+            whole star. Counts and percentages are shares of product records, not of customers
             {hasDates ? "" : ', and "this window" is the whole dataset — these records carry no dates'}
             .
           </p>

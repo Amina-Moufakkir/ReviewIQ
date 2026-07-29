@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Product, Review } from "../types";
 import { analyze, filterReviews, reviewStatsFor, AnalysisError, MIN_EVIDENCE } from "./analysisEngine";
+import { PRODUCT_RECORD, REVIEW } from "../lib/datasetInfo";
 
 const PRODUCT_ID = "widget-01";
 const PRODUCTS: Product[] = [
@@ -338,5 +339,47 @@ describe("reviewStatsFor", () => {
     expect(stats.count).toBe(2);
     expect(stats.from).toBe("2026-01-15");
     expect(stats.to).toBe("2026-03-01");
+  });
+});
+
+describe("analyze — summary names the dataset's unit", () => {
+  const one: Review[] = [review({ id: "only", date: "2026-02-01", rating: 4, text: "The sound quality is lovely." })];
+  const many: Review[] = [
+    review({ id: "a", date: "2026-02-01", rating: 4, text: "The sound quality is lovely." }),
+    review({ id: "b", date: "2026-02-02", rating: 5, text: "Great sound, superb bass." }),
+  ];
+
+  it("defaults to reviews when no unit is given", () => {
+    expect(analyze(FULL, one, PRODUCTS).summary).toMatch(/a single review of/i);
+    expect(analyze(FULL, many, PRODUCTS).summary).toMatch(/Across 2 reviews of/i);
+  });
+
+  it("says review / reviews for review-level data", () => {
+    expect(analyze(FULL, one, PRODUCTS, REVIEW).summary).toMatch(/a single review of/i);
+    expect(analyze(FULL, many, PRODUCTS, REVIEW).summary).toMatch(/Across 2 reviews of/i);
+  });
+
+  it("says product record / product records for product-level data", () => {
+    expect(analyze(FULL, one, PRODUCTS, PRODUCT_RECORD).summary).toMatch(/a single product record of/i);
+    expect(analyze(FULL, many, PRODUCTS, PRODUCT_RECORD).summary).toMatch(/Across 2 product records of/i);
+  });
+
+  it("never calls a product record a review, in any summary branch", () => {
+    // Below MIN_EVIDENCE, so this lands on the "no themes" branch, which also
+    // named the unit — the branch that produced the reported wording.
+    const summary = analyze(FULL, one, PRODUCTS, PRODUCT_RECORD).summary;
+    expect(summary).toMatch(/individual product records vary/i);
+    expect(summary).not.toMatch(/\breviews?\b/i);
+
+    // And the empty-window branch, reachable on dated data.
+    const empty = analyze({ ...FULL, from: "2020-01-01", to: "2020-12-31" }, one, PRODUCTS, PRODUCT_RECORD);
+    expect(empty.summary).toMatch(/No product records for/i);
+    expect(empty.summary).not.toMatch(/\breviews?\b/i);
+  });
+
+  it("keeps every other field of AnalysisResult identical across units", () => {
+    const asReviews = analyze(FULL, many, PRODUCTS, REVIEW);
+    const asRecords = analyze(FULL, many, PRODUCTS, PRODUCT_RECORD);
+    expect({ ...asRecords, summary: "" }).toEqual({ ...asReviews, summary: "" });
   });
 });

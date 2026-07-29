@@ -4,6 +4,7 @@ import { adaptAmazonCsv, type AmazonAdapterResult } from "./amazonAdapter";
 import { hasDates, isSyntheticDemo, AMAZON_DEMO_LABEL } from "./datasetInfo";
 import { shortProductLabel } from "./productLabel";
 import { analyze } from "../services/analysisEngine";
+import { analyzeReviews } from "../services/analyzeReviews";
 import {
   parseReviewRequest,
   MAX_REVIEWS_PER_REQUEST,
@@ -48,6 +49,16 @@ function assertAdapterInvariants(name: string, result: AmazonAdapterResult) {
 
   it(`${name}: gives every accepted record a unique id`, () => {
     expect(new Set(dataset.reviews.map((r) => r.id)).size).toBe(stats.accepted);
+  });
+
+  it(`${name}: summarizes in product records, never in reviews`, () => {
+    // The boundary (analyzeReviews) is what decides the unit, so assert through
+    // it: dropping unitFor() there is invisible to the engine's own tests.
+    const product = dataset.products[0]!;
+    return analyzeReviews({ productId: product.id, from: "", to: "" }, dataset).then((result) => {
+      expect(result.summary).toMatch(/product records?/i);
+      expect(result.summary).not.toMatch(/\breviews?\b/i);
+    });
   });
 
   it(`${name}: carries no dates at all`, () => {

@@ -2,6 +2,7 @@ import type { AnalysisInput, AnalysisResult, Dataset } from "../types";
 import { analyze, AnalysisError } from "./analysisEngine";
 import { analyzeWithClaude } from "./claudeEngine";
 import { ANALYSIS_ENGINE } from "../config";
+import { unitFor } from "../lib/datasetInfo";
 
 // Re-export so the UI keeps a single import surface for the analysis boundary.
 export { AnalysisError };
@@ -22,7 +23,8 @@ export async function analyzeReviews(input: AnalysisInput, dataset: Dataset): Pr
     return analyzeWithClaude(input, dataset);
   }
   await delay(700);
-  return analyze(input, dataset.reviews, dataset.products);
+  // The dataset knows what one row is; the engine only needs the label.
+  return analyze(input, dataset.reviews, dataset.products, unitFor(dataset));
 }
 
 function delay(ms: number): Promise<void> {

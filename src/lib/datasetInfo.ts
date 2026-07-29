@@ -32,12 +32,12 @@ export interface DatasetUnit {
   isProductLevel: boolean;
 }
 
-const PRODUCT_RECORD: DatasetUnit = {
+export const PRODUCT_RECORD: DatasetUnit = {
   one: "product record",
   many: "product records",
   isProductLevel: true,
 };
-const REVIEW: DatasetUnit = { one: "review", many: "reviews", isProductLevel: false };
+export const REVIEW: DatasetUnit = { one: "review", many: "reviews", isProductLevel: false };
 
 export function unitFor(dataset: Dataset): DatasetUnit {
   return dataset.source === "amazon" ? PRODUCT_RECORD : REVIEW;
