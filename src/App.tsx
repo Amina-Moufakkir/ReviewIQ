@@ -33,12 +33,23 @@ const EMPTY_DATASET: Dataset = {
 /**
  * Fetch and adapt the Amazon fixture. Kept outside the component (and free of
  * state) so the mount effect and the manual reload share one implementation.
+ *
+ * The fixture is developer-supplied and not committed, so a missing file is an
+ * expected setup state, not a crash — it gets a message that says how to fix
+ * it. A dev server answering an unknown path with the SPA's index.html looks
+ * like a 200 of HTML, so that counts as missing too.
  */
 async function fetchAmazonDataset() {
   const res = await fetch(`${import.meta.env.BASE_URL}${AMAZON_DATASET_FILE}`);
-  if (!res.ok) throw new CsvError(`Could not load the Amazon dataset (HTTP ${res.status}).`);
+  const servedHtml = (res.headers.get("content-type") ?? "").includes("text/html");
+  if (!res.ok || servedHtml) throw new CsvError(MISSING_DATASET_MESSAGE);
   return adaptAmazonCsv(await res.text(), AMAZON_DATASET_LABEL);
 }
+
+const MISSING_DATASET_MESSAGE =
+  `The Amazon dataset is not available. It is supplied locally rather than committed — ` +
+  `see "Amazon dataset" in the README, then run \`npm run build:amazon\`. ` +
+  `You can use the built-in sample in the meantime.`;
 
 /** User-facing message for a failed dataset load, without leaking internals. */
 function loadErrorMessage(err: unknown, fallback: string): string {
@@ -201,7 +212,7 @@ export default function App() {
               <StateMessage
                 tone="idle"
                 title="Awaiting your query"
-                description="Choose a product and window above, then run the analysis."
+                description={`Choose a product${dated ? " and window" : ""} above, then run the analysis.`}
               />
             ) : null}
 

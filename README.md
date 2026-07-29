@@ -119,9 +119,15 @@ For the Claude engine's endpoint behavior, request limits, secret configuration,
 
 On load, ReviewIQ analyzes the **Amazon Sales Dataset** — approximately 1,465
 real Amazon product listings. It is fetched at runtime from
-[`public/amazon-products.csv`](public/amazon-products.csv), parsed by the same
-RFC 4180 parser and validated by the same loader as any uploaded CSV, and
-adapted by `src/lib/amazonAdapter.ts`.
+`public/amazon-products.csv`, parsed by the same RFC 4180 parser and validated
+by the same loader as any uploaded CSV, and adapted by
+`src/lib/amazonAdapter.ts`.
+
+> **The dataset is not committed to this repository — you supply it locally.**
+> Its license and redistribution terms have not been verified, so nothing
+> derived from it is published here. See [Getting the dataset](#getting-the-dataset)
+> below. Without it the app starts, says so, and offers the built-in sample; the
+> dataset-specific tests skip rather than fail.
 
 ### What one row actually is
 
@@ -194,23 +200,55 @@ as here, because technical compatibility is not analytical validity.
   promotion the reviewer purchased under, so it is deliberately not mapped to
   `Review.discountPercent` and the promotions panel stays hidden for this data.
 
-### Regenerating the fixture
+### Getting the dataset
 
-The shipped CSV is generated, never hand-edited:
+Neither the raw source nor the generated fixture is committed. Both are
+gitignored and supplied locally:
+
+| Path | What it is | Committed? |
+| --- | --- | --- |
+| `src/amazon.csv` | raw source, 16 columns, ~4.5 MB — **you download this** | no |
+| `public/amazon-products.csv` | generated, 9 columns, ~2.3 MB — what the app fetches | no |
+| `scripts/build-amazon-csv.mjs` | the deterministic generator | **yes** |
+| `src/test/fixtures/amazon-mini.csv` | 12-record synthetic stand-in | **yes** |
+
+Two reasons nothing derived from the dataset is published here:
+
+1. **License.** The source is the public *Amazon Sales Dataset* (widely
+   mirrored, e.g. on Kaggle). Its redistribution terms have not been verified
+   for this repository, so it is not redistributed. Once the license explicitly
+   permits redistribution, the generated fixture can be committed with the
+   attribution its terms require — nothing else in the setup needs to change.
+2. **Personal data.** The raw file's `user_id` and `user_name` columns hold
+   9,269 real reviewer identities. The generator drops them (along with unused
+   bulk: `about_product`, `img_link`, `product_link`, `review_id`,
+   `review_title`), so the generated fixture carries no personal identifiers —
+   but it is still derived from the source, so rule 1 governs it too.
+
+To set it up:
 
 ```bash
-node scripts/build-amazon-csv.mjs   # src/amazon.csv → public/amazon-products.csv
+# 1. Download the Amazon Sales Dataset CSV and save it, unmodified, as:
+#      src/amazon.csv
+# 2. Generate the fixture the app fetches:
+npm run build:amazon        # src/amazon.csv → public/amazon-products.csv
 ```
 
-The raw 4.5 MB source (`src/amazon.csv`) is **not committed**: it contains
-`user_id` and `user_name` columns holding 9,269 real reviewer identities. The
-generator drops those columns along with unused bulk (`about_product`,
-`img_link`, `product_link`, `review_id`, `review_title`), producing a 2.3 MB
-fixture with no personal identifiers. It is served from `public/` and fetched at
-runtime, so it adds nothing to the JS bundle.
+The CSV is never hand-edited — re-run the script instead. It is a physical
+projection only: it drops columns and copies every cell it keeps verbatim, so
+all normalization and interpretation stay in the runtime adapter. The fixture is
+served from `public/` and fetched at runtime, so it adds nothing to the JS bundle.
 
-> **Attribution:** the source is the public *Amazon Sales Dataset*. Confirm its
-> license and attribution terms for your own use before redistributing it.
+**Without the real dataset**, the app shows an explanatory message and the
+built-in sample and CSV upload keep working. To drive the Amazon code path
+anyway, use the committed synthetic fixture:
+
+```bash
+cp src/test/fixtures/amazon-mini.csv public/amazon-products.csv
+```
+
+See [`src/test/fixtures/README.md`](src/test/fixtures/README.md) for what that
+fixture deliberately contains.
 
 ## Sample dataset (for CSV-upload development)
 

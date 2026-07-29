@@ -74,7 +74,8 @@ export function AnalyzeForm({
           ) : null}
         </div>
 
-        {/* No date window for undated data — there is nothing to filter on. */}
+        {/* No date window for undated data — there is nothing to filter on.
+            With no data loaded at all, neither the picker nor the note applies. */}
         {hasDates ? (
           <DateRangePicker
             from={from}
@@ -84,12 +85,12 @@ export function AnalyzeForm({
             disabled={isLoading}
             error={rangeError}
           />
-        ) : (
+        ) : products.length > 0 ? (
           <p className="font-mono text-[11px] leading-relaxed text-ink-soft">
             This dataset carries no review dates, so there is no window to select. Every{" "}
             {unit.one} for the chosen product is analyzed.
           </p>
-        )}
+        ) : null}
 
         <button
           type="submit"
