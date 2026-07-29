@@ -52,9 +52,17 @@ export function SentimentColumn({
                 </span>
                 <span className="text-sm font-medium text-ink">{f.label}</span>
               </div>
+              {/* "1 of 1 · 100%" is arithmetically true and reads as unanimity,
+                  so a lone row states where the theme was found instead. */}
               <p className="font-mono text-[11px] text-ink-soft">
-                Mentioned in {f.mentions} of {reviewCount} selected{" "}
-                {pluralize(reviewCount, unit)} · {f.percent}%
+                {reviewCount === 1 ? (
+                  <>Mentioned in the selected {unit.one}</>
+                ) : (
+                  <>
+                    Mentioned in {f.mentions} of {reviewCount} selected{" "}
+                    {pluralize(reviewCount, unit)} · {f.percent}%
+                  </>
+                )}
               </p>
               <blockquote className="border-l border-rule pl-3">
                 <p className="text-sm italic leading-relaxed text-ink">“{f.quote}”</p>

@@ -162,8 +162,17 @@ that runs entirely in the browser with no API calls. It:
   so `cleaner teeth` does not trigger `Cleaning`;
 - **decides sentiment from the star rating** — ≥ 4 is praise, ≤ 2 is a fault,
   3 is neutral;
-- only surfaces a theme once a minimum number of same-polarity reviews support
-  it, and always attaches a real supporting quote;
+- only surfaces a theme once enough same-polarity rows support it, and always
+  attaches a real supporting quote. **How many rows is "enough" depends on what
+  a row is** (`minEvidenceFor`): **two** for review data, because the threshold
+  exists to stop one customer's passing remark becoming a theme — but **one**
+  for product records, because a single record already bundles roughly eight
+  customers behind a rating averaged over thousands. Requiring two records would
+  require the same product to be listed twice on the marketplace, which is a
+  property of marketplace listings, not of evidence. A product-level finding
+  therefore claims the theme is *mentioned* in that record, and the UI says
+  "Themes mentioned" rather than "Recurring themes", and omits the percentage
+  when there is only one row (1 of 1 is 100%, which reads as unanimity);
 - adds a **discounts & promotions** breakdown (`src/services/promotionAnalysis.ts`)
   when the reviews carry promotion data — comparing promoted vs full-price
   purchases on average rating; datasets without it simply omit the section.
@@ -342,13 +351,21 @@ as here, because technical compatibility is not analytical validity.
   transformation, not a claim that the average rating was originally an
   integer.* Rounding is not optional: the loader rejects non-integers, and so
   does the `/api/analyze` request contract, and neither may be modified.
+- **One record per product, mostly.** 1,258 of the 1,350 products have exactly
+  one record (70 have two, 22 have three). This is why the evidence threshold is
+  per-unit: at two rows, 93% of products could not produce a theme *in
+  principle*, and only 83 products reported anything at all. At one row, 1,149
+  do. Read a finding accordingly — it rests on one record's bundled text, not on
+  agreement between records.
 - **Praise/fault skew.** The heuristic engine treats `rating >= 4` as praise
   evidence and `rating <= 2` as fault evidence. On this data that is 1,422
   records versus 2 — an artifact of averaging thousands of customers into one
-  number, not a finding about the products. Expect a near-empty "what they
-  fault" column and few recommendations from the heuristic engine. The Claude
-  engine reads the text instead and does surface faults — see
-  [Why the second engine exists](#why-the-second-engine-exists).
+  number, not a finding about the products. **The evidence threshold does not
+  fix this**: with one-record evidence, praise appears for 1,149 products but
+  faults for 1, and recommendations (which derive from faults) stay empty. A
+  rating-driven engine cannot find complaints in data whose ratings are product
+  averages. The Claude engine reads the text instead and does surface faults —
+  see [Why the second engine exists](#why-the-second-engine-exists).
 - **No dates.** The dataset has no date field of any kind. No date is invented,
   derived, or substituted — records are undated (`date: ""`), and the date
   window is hidden rather than shown empty or pre-filled.

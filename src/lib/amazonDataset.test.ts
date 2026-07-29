@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import { adaptAmazonCsv, type AmazonAdapterResult } from "./amazonAdapter";
-import { hasDates, isSyntheticDemo, AMAZON_DEMO_LABEL } from "./datasetInfo";
+import { hasDates, isSyntheticDemo, unitFor, AMAZON_DEMO_LABEL } from "./datasetInfo";
 import { shortProductLabel } from "./productLabel";
 import { analyze } from "../services/analysisEngine";
 import { analyzeReviews } from "../services/analyzeReviews";
@@ -260,4 +260,72 @@ describe.skipIf(!hasRealFixture)("Amazon adapter — real generated fixture", ()
     expect(real.dataset.reviews.filter((r) => r.rating >= 4)).toHaveLength(1422);
     expect(real.dataset.reviews.filter((r) => r.rating <= 2)).toHaveLength(2);
   });
+});
+
+/**
+ * The production symptom this threshold work fixes: every Amazon product
+ * returned 0 praise, 0 faults and 0 recommendations, because a theme needed two
+ * same-polarity rows and 1,258 of the 1,350 products have exactly one record.
+ * Asserted on the synthetic fixtures (always) and the real one (when present).
+ */
+describe("Amazon analysis — single-record products still produce findings", () => {
+  function findingsFor(result: AmazonAdapterResult, productId: string) {
+    return analyze(
+      { productId, from: "", to: "" },
+      result.dataset.reviews,
+      result.dataset.products,
+      unitFor(result.dataset),
+    );
+  }
+
+  function singleRecordProductIds({ dataset }: AmazonAdapterResult): string[] {
+    const counts = new Map<string, number>();
+    for (const r of dataset.reviews) counts.set(r.productId, (counts.get(r.productId) ?? 0) + 1);
+    return [...counts.entries()].filter(([, n]) => n === 1).map(([id]) => id);
+  }
+
+  it("demo fixture: a one-record product yields a finding backed by its own text", () => {
+    const singles = singleRecordProductIds(demo);
+    expect(singles.length).toBeGreaterThan(0);
+
+    const withFindings = singles
+      .map((id) => ({ id, result: findingsFor(demo, id) }))
+      .filter(({ result }) => result.praise.length + result.faults.length > 0);
+    expect(withFindings.length).toBeGreaterThan(0);
+
+    const { id, result } = withFindings[0]!;
+    expect(result.reviewCount).toBe(1);
+    const finding = [...result.praise, ...result.faults][0]!;
+    const text = demo.dataset.reviews.find((r) => r.productId === id)!.text;
+    expect(text).toContain(finding.quote);
+  });
+
+  it("mini fixture: findings appear for products carrying a single record", () => {
+    const singles = singleRecordProductIds(mini);
+    const found = singles.some((id) => {
+      const r = findingsFor(mini, id);
+      return r.praise.length + r.faults.length > 0;
+    });
+    expect(found).toBe(true);
+  });
+
+  it.skipIf(!hasRealFixture)(
+    "real fixture: the traced product B008IFXQFU reports themes instead of nothing",
+    () => {
+      const real = adaptAmazonCsv(readFileSync(REAL_PATH, "utf8"), "Amazon product records");
+      const traced = findingsFor(real, "B008IFXQFU");
+
+      // One record, six matching themes, and previously zero findings.
+      expect(traced.reviewCount).toBe(1);
+      expect(traced.praise.length).toBeGreaterThan(0);
+
+      // And it is not a one-off: most products now report something.
+      const ids = real.dataset.products.map((p) => p.id);
+      const productive = ids.filter((id) => {
+        const r = findingsFor(real, id);
+        return r.praise.length + r.faults.length > 0;
+      });
+      expect(productive.length).toBeGreaterThan(ids.length / 2);
+    },
+  );
 });

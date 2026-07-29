@@ -2,7 +2,7 @@ import type { AnalysisInput, AnalysisResult, Finding, Product, Review, ReviewSta
 import { THEME_LIBRARY, type ThemeDef } from "./themeLibrary";
 import { matchesKeyword } from "../lib/matchKeyword";
 import { analyzePromotions } from "./promotionAnalysis";
-import { REVIEW, type DatasetUnit } from "../lib/datasetInfo";
+import { REVIEW, scopeLabel, themePhrase, type DatasetUnit } from "../lib/datasetInfo";
 
 /**
  * Pure, synchronous analysis engine. No React, no I/O, no latency — so it is
@@ -14,9 +14,10 @@ import { REVIEW, type DatasetUnit } from "../lib/datasetInfo";
  *     product-agnostic vocabulary (themeLibrary.ts).
  *   - A mention is treated as praise when the review is rated >= 4, and as a
  *     fault when rated <= 2. Rating 3 is neutral and supports neither.
- *   - A theme only becomes a finding when at least MIN_EVIDENCE same-polarity
- *     reviews support it, and every finding carries a real supporting quote —
- *     sentiment is never asserted from the rating alone.
+ *   - A theme only becomes a finding when enough same-polarity rows support it
+ *     (see minEvidenceFor — two reviews, or one product record, since a record
+ *     already bundles many customers), and every finding carries a real
+ *     supporting quote — sentiment is never asserted from the rating alone.
  *
  * The async boundary (analyzeReviews.ts) wraps this; a future real classifier
  * or model can replace the engine while keeping the AnalysisResult contract.
@@ -24,6 +25,30 @@ import { REVIEW, type DatasetUnit } from "../lib/datasetInfo";
 
 /** Minimum same-polarity supporting reviews before a theme becomes a finding. */
 export const MIN_EVIDENCE = 2;
+
+/**
+ * How many same-polarity rows a theme needs before it becomes a finding.
+ *
+ * The threshold exists so one person's passing remark is never reported as a
+ * theme. That is what two REVIEW rows buy: two separate customers. It is not
+ * what two PRODUCT RECORDS buy — one record already bundles roughly eight
+ * customers' reviews behind a rating averaged over thousands, so requiring two
+ * of them requires the same product to be listed twice on the marketplace,
+ * which is an artifact of duplicate listings rather than evidence.
+ *
+ * On this dataset that mattered: 1,258 of 1,350 products have exactly one
+ * record, so every theme in them was found and then discarded, and 88% of
+ * products whose text matches a theme reported nothing at all.
+ *
+ * So the unit decides the threshold. Review data is unchanged at 2; product
+ * records need 1, because the aggregation the threshold demands has already
+ * happened inside the cell. What a product-level finding then claims is
+ * weaker and the UI says so: the theme is *mentioned* in that record, not
+ * *recurring* across customers (see `themePhrase`).
+ */
+export function minEvidenceFor(unit: DatasetUnit): number {
+  return unit.isProductLevel ? 1 : MIN_EVIDENCE;
+}
 
 /** Ratings at or above this count as positive evidence. */
 const POSITIVE_RATING = 4;
@@ -85,6 +110,7 @@ export function analyze(
   const averageRating =
     reviewCount === 0 ? 0 : round1(matched.reduce((sum, r) => sum + r.rating, 0) / reviewCount);
 
+  const minEvidence = minEvidenceFor(unit);
   const praise: Finding[] = [];
   const faults: Finding[] = [];
   for (const theme of THEME_LIBRARY) {
@@ -95,10 +121,10 @@ export function analyze(
     const negatives = mentioning.filter((r) => r.rating <= NEGATIVE_RATING);
 
     // A theme can surface in both columns when opinion is genuinely split.
-    if (positives.length >= MIN_EVIDENCE) {
+    if (positives.length >= minEvidence) {
       praise.push(makeFinding(theme, "positive", positives, reviewCount));
     }
-    if (negatives.length >= MIN_EVIDENCE) {
+    if (negatives.length >= minEvidence) {
       faults.push(makeFinding(theme, "negative", negatives, reviewCount));
     }
   }
@@ -117,7 +143,7 @@ export function analyze(
     to,
     reviewCount,
     averageRating,
-    summary: buildSummary(product, reviewCount, averageRating, praise, faults, unit),
+    summary: buildSummary(product, reviewCount, averageRating, praise, faults, unit, datedRows(matched)),
     praise,
     faults,
     recommendations,
@@ -213,6 +239,7 @@ export function buildSummary(
   praise: Finding[],
   faults: Finding[],
   unit: DatasetUnit = REVIEW,
+  hasReviewDates = true,
 ): string {
   if (reviewCount === 0) {
     return `No ${unit.many} for ${product.name} fall in the selected window.`;
@@ -226,20 +253,30 @@ export function buildSummary(
 
   const top = praise[0];
   const bottom = faults[0];
-  const posClause = top
-    ? `${lowerFirst(top.label)} draws the most praise (${top.mentions} of ${reviewCount})`
-    : "";
-  const negClause = bottom
-    ? `${lowerFirst(bottom.label)} is the most common complaint (${bottom.mentions} of ${reviewCount})`
-    : "";
+  // "(1 of 1)" is trivially true and reads as unanimity, exactly as it does in
+  // the findings column, so a lone row states the theme without the tally.
+  const support = (f: Finding) => (reviewCount === 1 ? "" : ` (${f.mentions} of ${reviewCount})`);
+  const posClause = top ? `${lowerFirst(top.label)} draws the most praise${support(top)}` : "";
+  const negClause = bottom ? `${lowerFirst(bottom.label)} is the most common complaint${support(bottom)}` : "";
+  // Undated data has no window to speak of, and one product record cannot make
+  // anything recurring — the same rules the rest of the UI follows.
+  const scope = scopeLabel(unit, hasReviewDates);
 
   if (top && bottom && top.label === bottom.label) {
     return `${base}opinion is most divided on ${lowerFirst(top.label)} (${top.mentions} praise vs ${bottom.mentions} complaints).`;
   }
   if (top && bottom) return `${base}${posClause}, while ${negClause}.`;
-  if (top) return `${base}${posClause}. No recurring complaints have enough evidence in this window.`;
-  if (bottom) return `${base}${negClause}. Little positive sentiment has enough evidence in this window.`;
+  if (top) return `${base}${posClause}. No ${themePhrase(unit, "complaints")} have enough evidence ${scope}.`;
+  if (bottom) return `${base}${negClause}. Little positive sentiment has enough evidence ${scope}.`;
   return `${base}no themes reach the evidence threshold — individual ${unit.many} vary.`;
+}
+
+/**
+ * Whether these rows carry dates. Mirrors `hasDates(dataset)` for the matched
+ * subset, so the summary never mentions a window the data cannot have.
+ */
+function datedRows(rows: Review[]): boolean {
+  return rows.length > 0 && rows.every((r) => r.date !== "");
 }
 
 function lowerFirst(s: string): string {

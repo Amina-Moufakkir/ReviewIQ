@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { AnalysisInput, Product, Review } from "../types";
 import { validateTags, type RawTag } from "./claudeTags";
 import { tagsToResult } from "./tagsToResult";
+import { PRODUCT_RECORD } from "../lib/datasetInfo";
 
 const PRODUCT: Product = { id: "p1", name: "Test Widget", category: "Electronics" };
 const INPUT: AnalysisInput = { productId: "p1", from: "2026-01-01", to: "2026-12-31" };
@@ -108,5 +109,35 @@ describe("tagsToResult", () => {
     const result = analyze(matched, raw);
     expect(result.faults.some((f) => f.label === "Sound")).toBe(true);
     expect(result.recommendations).toEqual([]);
+  });
+});
+
+/**
+ * Both engines must agree on what counts as evidence, or switching engines
+ * would silently change which themes survive. The Claude path takes the same
+ * per-unit threshold as the heuristic one.
+ */
+describe("tagsToResult — evidence threshold follows the dataset unit", () => {
+  const one = [review("r1", "The sound quality is superb.", "Ann")];
+  const raw: RawTag[] = [
+    { review_id: "r1", theme: "Sound quality", sentiment: "praise", evidence_span: "sound quality is superb" },
+  ];
+
+  function build(unit?: typeof PRODUCT_RECORD) {
+    const reviewsById = new Map(one.map((r) => [r.id, r.text] as const));
+    const { valid } = validateTags(raw, reviewsById);
+    return unit
+      ? tagsToResult(INPUT, PRODUCT, one, valid, unit)
+      : tagsToResult(INPUT, PRODUCT, one, valid);
+  }
+
+  it("drops a single-review theme for review data", () => {
+    expect(build().praise).toHaveLength(0);
+  });
+
+  it("keeps a single-record theme for product-level data", () => {
+    const result = build(PRODUCT_RECORD);
+    expect(result.praise).toHaveLength(1);
+    expect(result.praise[0]!.mentions).toBe(1);
   });
 });

@@ -63,6 +63,16 @@ export function formatCount(count: number, unit: DatasetUnit): string {
 }
 
 /**
+ * "Recurring" claims a theme repeated across separate customers, which is what
+ * two review rows mean. One product record already bundles many customers'
+ * reviews, so a theme found in it is *present* rather than recurring — the word
+ * is dropped for product-level data instead of overstating what was counted.
+ */
+export function themePhrase(unit: DatasetUnit, noun: "themes" | "complaints" | "issues"): string {
+  return unit.isProductLevel ? noun : `recurring ${noun}`;
+}
+
+/**
  * What an analysis covered, for sentences like "no themes have enough evidence
  * …". Dated data is bounded by the window the analyst chose; undated data is
  * bounded only by the rows themselves, so saying "window" there would describe

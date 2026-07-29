@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import type { Product, Review } from "../types";
-import { analyze, filterReviews, reviewStatsFor, AnalysisError, MIN_EVIDENCE } from "./analysisEngine";
+import {
+  analyze,
+  filterReviews,
+  reviewStatsFor,
+  AnalysisError,
+  MIN_EVIDENCE,
+  minEvidenceFor,
+} from "./analysisEngine";
 import { PRODUCT_RECORD, REVIEW } from "../lib/datasetInfo";
 
 const PRODUCT_ID = "widget-01";
@@ -365,9 +372,13 @@ describe("analyze — summary names the dataset's unit", () => {
   });
 
   it("never calls a product record a review, in any summary branch", () => {
-    // Below MIN_EVIDENCE, so this lands on the "no themes" branch, which also
-    // named the unit — the branch that produced the reported wording.
-    const summary = analyze(FULL, one, PRODUCTS, PRODUCT_RECORD).summary;
+    // The "no themes" branch — reached with text no theme keyword matches,
+    // since a single product record now clears the evidence threshold on its
+    // own and would otherwise produce a finding.
+    const themeless: Review[] = [
+      review({ id: "only", date: "2026-02-01", rating: 4, text: "Arrived on the promised day." }),
+    ];
+    const summary = analyze(FULL, themeless, PRODUCTS, PRODUCT_RECORD).summary;
     expect(summary).toMatch(/individual product records vary/i);
     expect(summary).not.toMatch(/\breviews?\b/i);
 
@@ -381,5 +392,109 @@ describe("analyze — summary names the dataset's unit", () => {
     const asReviews = analyze(FULL, many, PRODUCTS, REVIEW);
     const asRecords = analyze(FULL, many, PRODUCTS, PRODUCT_RECORD);
     expect({ ...asRecords, summary: "" }).toEqual({ ...asReviews, summary: "" });
+  });
+});
+
+/**
+ * The evidence threshold counts rows, and a row means different things per
+ * dataset. Two REVIEW rows are two customers. One PRODUCT RECORD is already
+ * many customers bundled into one cell, so demanding two of them demanded a
+ * duplicate marketplace listing — and 1,258 of the Amazon dataset's 1,350
+ * products have exactly one record, so their themes were found and discarded.
+ */
+describe("analyze — evidence threshold follows the dataset unit", () => {
+  const oneThemed: Review[] = [
+    review({ id: "r1", date: "2026-02-01", rating: 5, text: "The sound quality is superb and the bass is rich." }),
+  ];
+
+  it("requires two rows for review data, one for product records", () => {
+    expect(minEvidenceFor(REVIEW)).toBe(2);
+    expect(minEvidenceFor(PRODUCT_RECORD)).toBe(1);
+    expect(MIN_EVIDENCE).toBe(2);
+  });
+
+  it("REGRESSION: a single review still produces no finding", () => {
+    const result = analyze(FULL, oneThemed, PRODUCTS, REVIEW);
+    expect(result.reviewCount).toBe(1);
+    expect(result.praise).toHaveLength(0);
+    expect(result.faults).toHaveLength(0);
+  });
+
+  it("a single product record produces a finding, with real supporting evidence", () => {
+    const result = analyze(FULL, oneThemed, PRODUCTS, PRODUCT_RECORD);
+    expect(result.reviewCount).toBe(1);
+    expect(result.praise.length).toBeGreaterThan(0);
+
+    const finding = result.praise[0]!;
+    expect(finding.mentions).toBe(1);
+    expect(finding.sentiment).toBe("positive");
+    // The quote is drawn from the record's own text, never synthesized.
+    expect(oneThemed[0]!.text).toContain(finding.quote);
+  });
+
+  it("still requires the rating to support the polarity", () => {
+    // Rating 3 is neutral: it supports neither column, threshold or not.
+    const neutral: Review[] = [
+      review({ id: "n1", date: "2026-02-01", rating: 3, text: "The sound quality is fine." }),
+    ];
+    const result = analyze(FULL, neutral, PRODUCTS, PRODUCT_RECORD);
+    expect(result.praise).toHaveLength(0);
+    expect(result.faults).toHaveLength(0);
+  });
+
+  it("surfaces a fault from one low-rated product record", () => {
+    const bad: Review[] = [
+      review({ id: "b1", date: "2026-02-01", rating: 1, text: "The bluetooth connection drops every few minutes." }),
+    ];
+    const result = analyze(FULL, bad, PRODUCTS, PRODUCT_RECORD);
+    expect(result.faults.length).toBeGreaterThan(0);
+    // Faults drive recommendations, so those return too.
+    expect(result.recommendations.length).toBeGreaterThan(0);
+  });
+
+  it("leaves multi-row results unchanged for both units", () => {
+    const two: Review[] = [
+      review({ id: "a", date: "2026-02-01", rating: 5, text: "The sound quality is superb." }),
+      review({ id: "b", date: "2026-02-02", rating: 5, text: "Great sound quality throughout." }),
+    ];
+    const asReviews = analyze(FULL, two, PRODUCTS, REVIEW);
+    const asRecords = analyze(FULL, two, PRODUCTS, PRODUCT_RECORD);
+    expect(asRecords.praise).toEqual(asReviews.praise);
+    expect(asRecords.faults).toEqual(asReviews.faults);
+    expect(asReviews.praise.length).toBeGreaterThan(0);
+  });
+
+  it("counts and percentages still describe rows, not customers", () => {
+    const result = analyze(FULL, oneThemed, PRODUCTS, PRODUCT_RECORD);
+    const finding = result.praise[0]!;
+    // 1 of 1 is 100% — true, and why the UI hides the percentage at one row.
+    expect(finding.mentions).toBe(1);
+    expect(finding.percent).toBe(100);
+  });
+});
+
+describe("analyze — summary wording for undated, single-record data", () => {
+  const oneThemed: Review[] = [
+    review({ id: "r1", date: "", rating: 5, text: "The sound quality is superb and the bass is rich." }),
+  ];
+  const UNDATED = { productId: PRODUCT_ID, from: "", to: "" };
+
+  it("drops the (1 of 1) tally, the window, and the word recurring", () => {
+    const summary = analyze(UNDATED, oneThemed, PRODUCTS, PRODUCT_RECORD).summary;
+    expect(summary).toMatch(/draws the most praise\./);
+    expect(summary).not.toMatch(/\(1 of 1\)/);
+    expect(summary).not.toMatch(/in this window/);
+    expect(summary).not.toMatch(/recurring/i);
+    expect(summary).toMatch(/in these product records/);
+  });
+
+  it("keeps the tally, window and recurring for dated review data", () => {
+    const two: Review[] = [
+      review({ id: "a", date: "2026-02-01", rating: 5, text: "The sound quality is superb." }),
+      review({ id: "b", date: "2026-02-02", rating: 5, text: "Great sound quality throughout." }),
+    ];
+    const summary = analyze(FULL, two, PRODUCTS, REVIEW).summary;
+    expect(summary).toMatch(/\(2 of 2\)/);
+    expect(summary).toMatch(/No recurring complaints have enough evidence in this window\./);
   });
 });

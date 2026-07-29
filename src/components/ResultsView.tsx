@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AnalysisResult, Finding } from "../types";
-import { dateRangeSuffix, formatCount, scopeLabel, type DatasetUnit } from "../lib/datasetInfo";
+import { dateRangeSuffix, formatCount, scopeLabel, themePhrase, type DatasetUnit } from "../lib/datasetInfo";
 import { generateMarkdownReport } from "../lib/generateMarkdownReport";
 import { copyReportToClipboard } from "../lib/copyReport";
 import { SectionLabel } from "./SectionLabel";
@@ -132,12 +132,13 @@ export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
       {/* Discounts & promotions — shown only when the dataset carries it. */}
       {result.promotion ? <PromotionPanel insight={result.promotion} /> : null}
 
-      {/* Recurring themes — a quick scan, colored by sentiment. */}
+      {/* Themes — a quick scan, colored by sentiment. "Recurring" is only
+          claimed for review data; one product record cannot recur. */}
       <div>
-        <SectionLabel>Recurring themes</SectionLabel>
+        <SectionLabel>{unit.isProductLevel ? "Themes mentioned" : "Recurring themes"}</SectionLabel>
         {themes.length === 0 ? (
           <p className="text-sm text-ink-soft">
-            No recurring themes surfaced {scopeLabel(unit, hasDates)}.
+            No {themePhrase(unit, "themes")} surfaced {scopeLabel(unit, hasDates)}.
           </p>
         ) : (
           <ul className="flex flex-wrap gap-2">
@@ -170,7 +171,7 @@ export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
         <SectionLabel>Recommended actions</SectionLabel>
         {result.recommendations.length === 0 ? (
           <p className="text-sm text-ink-soft">
-            No actions recommended — no recurring complaints {scopeLabel(unit, hasDates)}.
+            No actions recommended — no {themePhrase(unit, "complaints")} {scopeLabel(unit, hasDates)}.
           </p>
         ) : (
           <ol className="border-y border-rule">
