@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "build": "tsc -b && vite build",
+    "build:amazon": "node scripts/build-amazon-csv.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
