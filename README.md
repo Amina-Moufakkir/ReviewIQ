@@ -14,9 +14,10 @@ Customer insights are buried in thousands of reviews. Analysts spend hours readi
 
 The core MVP is complete. An analyst can:
 
-- Use the built-in sample, **upload a CSV**, or load the bundled 204-review sample
+- Use the **real Amazon product dataset** (the default), the built-in sample,
+  **upload a CSV**, or load the bundled 204-review sample
 - Select a product
-- Select a date range
+- Select a date range (for datasets that carry review dates)
 - Run the analysis
 - View a structured brief: overall summary, what customers praise, what they
   fault, recurring themes, and recommended actions
@@ -113,6 +114,103 @@ engine.
 For the Claude engine's endpoint behavior, request limits, secret configuration,
 `vercel dev`, deployment, and cost, see
 [Claude engine & Vercel deployment](#claude-engine--vercel-deployment) below.
+
+## Amazon dataset (the default data source)
+
+On load, ReviewIQ analyzes the **Amazon Sales Dataset** — approximately 1,465
+real Amazon product listings. It is fetched at runtime from
+[`public/amazon-products.csv`](public/amazon-products.csv), parsed by the same
+RFC 4180 parser and validated by the same loader as any uploaded CSV, and
+adapted by `src/lib/amazonAdapter.ts`.
+
+### What one row actually is
+
+**One row is a product record, not a customer review.** Each row is a product
+listing that carries a product-average rating and the review text of roughly
+eight customers concatenated into a single cell. Everything the app reports
+about this dataset therefore counts *product records*, and the UI says so —
+it never labels them "reviews".
+
+### Load accounting
+
+| | |
+| --- | --- |
+| Parsed records | 1,465 |
+| Accepted | 1,464 |
+| Skipped | 1 (`invalid_rating` — one row whose `rating` cell is `\|`) |
+| Products derived | 1,350 distinct `product_id`s |
+
+`accepted + skipped = parsed` always holds, every skip is attributed to a
+reason, and both numbers are shown in the app. No row is discarded silently.
+
+### Mapping
+
+| Amazon column | ReviewIQ field | Transformation |
+| --- | --- | --- |
+| `product_id` | `Review.productId`, `Product.id` | trimmed |
+| `product_name` | `Product.name` | trimmed |
+| `category` | `Product.category`, `Review.category` | `\|` hierarchy split; leaf used, full path preserved in `AmazonRecord.categoryPath` |
+| `review_content` | `Review.text` | **verbatim — never split on commas** |
+| `rating` | `Review.rating` + `Review.sourceRating` | rounded to an integer; source decimal preserved |
+| *(none)* | `Review.date` | `""` — the dataset has no dates and none are invented |
+| *(synthetic)* | `Review.id` | positional `amz-0001`… |
+| `discounted_price`, `actual_price`, `discount_percentage`, `rating_count` | *(not used for analysis)* | `₹`, `,` and `%` stripped into numbers; raw strings kept in `AmazonRecord.raw` |
+| `user_id`, `user_name`, `about_product`, `img_link`, `product_link`, `review_id`, `review_title` | *(dropped)* | see below |
+
+### Analytical limitations
+
+These are properties of the data, not bugs. They are stated in the app as well
+as here, because technical compatibility is not analytical validity.
+
+- **Rounded ratings.** Amazon ratings are product-average decimal ratings.
+  ReviewIQ currently requires integer ratings (1–5). The adapter rounds the
+  average rating to the nearest integer for compatibility while preserving the
+  original decimal value in `Review.sourceRating`. *This is a compatibility
+  transformation, not a claim that the average rating was originally an
+  integer.* Rounding is not optional: the loader rejects non-integers, and so
+  does the `/api/analyze` request contract, and neither may be modified.
+- **Praise/fault skew.** The heuristic engine treats `rating >= 4` as praise
+  evidence and `rating <= 2` as fault evidence. On this data that is 1,422
+  records versus 2 — an artifact of averaging thousands of customers into one
+  number, not a finding about the products. Expect a near-empty "what they
+  fault" column and few recommendations from the heuristic engine. The Claude
+  engine reads the text instead and does surface faults.
+- **No dates.** The dataset has no date field of any kind. No date is invented,
+  derived, or substituted — records are undated (`date: ""`), and the date
+  window is hidden rather than shown empty or pre-filled.
+- **Counts are records, not customers.** `reviewCount`, mention counts and
+  percentages are shares of product records. `user_id` is a comma-joined list of
+  several people and is **never** used as a row key or a customer count.
+- **Quotes are drawn from bundled text.** A representative quote comes from a
+  cell that concatenates several customers, so it is one person's sentence
+  attributed to a record covering many. Some records also embed image URLs
+  mid-text.
+- **Repeated products.** 92 `product_id`s appear on more than one row, with
+  differing prices, counts and text. Rows are not deduplicated; products are
+  derived from the first row per id.
+- **Currency is ₹ (INR).** Prices are Indian rupees; nothing in the app presents
+  them as any other currency.
+- **No promotion insight.** `discount_percentage` is a *listing* discount, not a
+  promotion the reviewer purchased under, so it is deliberately not mapped to
+  `Review.discountPercent` and the promotions panel stays hidden for this data.
+
+### Regenerating the fixture
+
+The shipped CSV is generated, never hand-edited:
+
+```bash
+node scripts/build-amazon-csv.mjs   # src/amazon.csv → public/amazon-products.csv
+```
+
+The raw 4.5 MB source (`src/amazon.csv`) is **not committed**: it contains
+`user_id` and `user_name` columns holding 9,269 real reviewer identities. The
+generator drops those columns along with unused bulk (`about_product`,
+`img_link`, `product_link`, `review_id`, `review_title`), producing a 2.3 MB
+fixture with no personal identifiers. It is served from `public/` and fetched at
+runtime, so it adds nothing to the JS bundle.
+
+> **Attribution:** the source is the public *Amazon Sales Dataset*. Confirm its
+> license and attribution terms for your own use before redistributing it.
 
 ## Sample dataset (for CSV-upload development)
 
@@ -270,11 +368,12 @@ React · TypeScript · Vite · Tailwind CSS · Vitest · Vercel Functions · Cla
 ## Scripts
 
 ```bash
-npm run dev        # start the dev server
-npm run typecheck  # tsc
-npm run lint       # eslint
-npm test           # vitest (engine, keyword matching, date validation, CSV parsing)
-npm run build      # production build
+npm run dev             # start the dev server
+npm run typecheck       # tsc
+npm run lint            # eslint
+npm test                # vitest (engine, keyword matching, date validation, CSV parsing, Amazon adapter)
+npm run build           # production build
+npm run build:amazon    # regenerate public/amazon-products.csv from src/amazon.csv
 ```
 
 ## Status
