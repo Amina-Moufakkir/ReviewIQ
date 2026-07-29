@@ -4,6 +4,7 @@ import { sampleDataset } from "./data/sampleDataset";
 import { reviewStatsFor } from "./services/analysisEngine";
 import { parseReviewsCsv, loadStatsFor, CsvError, type LoadStats } from "./lib/parseReviews";
 import { adaptAmazonCsv } from "./lib/amazonAdapter";
+import { loadUploadedCsv } from "./lib/loadUploadedCsv";
 import {
   AMAZON_DATASET_FILE,
   AMAZON_DATASET_LABEL,
@@ -106,9 +107,13 @@ async function fetchSampleCsv(): Promise<LoadedDataset> {
   return { dataset: result.dataset, stats: loadStatsFor(result) };
 }
 
+/**
+ * An upload may be either supported shape — a ReviewIQ review CSV or a raw
+ * Amazon product export — so the header, not the control it arrived through,
+ * decides which loader reads it. See lib/loadUploadedCsv.ts.
+ */
 async function readUploadedCsv(file: File): Promise<LoadedDataset> {
-  const result = parseReviewsCsv(await file.text(), file.name);
-  return { dataset: result.dataset, stats: loadStatsFor(result) };
+  return loadUploadedCsv(await file.text(), file.name);
 }
 
 /** User-facing message for a failed dataset load, without leaking internals. */
