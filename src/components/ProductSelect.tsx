@@ -1,4 +1,5 @@
 import type { Product } from "../types";
+import { shortProductLabel } from "../lib/productLabel";
 
 interface ProductSelectProps {
   products: Product[];
@@ -24,9 +25,12 @@ export function ProductSelect({ products, value, onChange, disabled }: ProductSe
         onChange={(e) => onChange(e.target.value)}
         className="rounded-sm border border-rule bg-paper px-3 py-2 text-sm text-ink outline-none transition focus:border-ink focus:ring-1 focus:ring-ink disabled:cursor-not-allowed disabled:opacity-50"
       >
+        {/* Marketplace titles run to hundreds of characters, so the option
+            shows a shortened label. `title` keeps the full one one hover away,
+            and the results header shows it in full once a product is chosen. */}
         {products.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name} · {p.category}
+          <option key={p.id} value={p.id} title={p.name}>
+            {shortProductLabel(p.name)} · {p.category}
           </option>
         ))}
       </select>
