@@ -152,6 +152,57 @@ No backend, database, or accounts are required for either engine's data: rows
 come from the Amazon fixture, the built-in sample, or a CSV you provide, and are
 parsed entirely in the browser.
 
+### Which engine for which data
+
+ReviewIQ chooses its sentiment method by the **shape of the data**, because the
+two are not interchangeable.
+
+**Rating-based sentiment (heuristic engine)** infers praise/fault from the star
+rating. It is valid only when each review carries its OWN rating that reflects
+its OWN text — the built-in sample and the 204-review sample CSV. There it is
+fast, free, deterministic and accurate, and it is what powers the offline
+GitHub Pages demo, which has no server to call.
+
+**Text-based sentiment (Claude engine)** reads the review body and assigns
+sentiment per theme mention. This is required for data where the rating does
+NOT track individual reviews — the Amazon dataset, whose rating is a
+product-AVERAGE over thousands of customers. On such data a rating-based engine
+goes blind: a complaint written inside a 4- or 5-star review, or inside an
+averaged 3-star record, is invisible to it. The Claude engine surfaces it
+because it reads the words. Here the average rating is shown only as CONTEXT in
+the header — labelled an averaged product rating — and never determines
+sentiment. It is not sent to the model at all.
+
+A worked example, `7SEVEN Compatible LG TV Remote` (`B09F6D21BY`), one product
+record whose average is 3.0★. The heuristic engine returns no praise and no
+faults: a rounded 3 is neither ≥ 4 nor ≤ 2, so no text in that record can
+produce a finding. The record actually reads:
+
+> The mouse feature of the remote is not working … no voice recognition and no
+> ray pointer … would like a refund for misrepresentation on the website …
+> Number buttons are not working, Defective product, it is not working with the
+> tv …
+
+The Claude engine surfaces those as faults, each quoted verbatim from that text.
+
+**The rule:** match the engine to the data shape. Rating-based sentiment is
+legitimate when the rating represents the review; when it represents an average
+of many, derive sentiment from the text and demote the rating to displayed
+context. The `analyzeReviews()` boundary lets both engines coexist so the right
+one runs for the right data.
+
+**Where this is verified, and where it is not.** The Claude engine is verified
+**locally only**, via `VITE_ANALYSIS_ENGINE=claude vercel dev`. It is **not
+enabled on the live Vercel deployment**, which runs heuristic-only: the
+production bundle is built without `VITE_ANALYSIS_ENGINE=claude`, so the Claude
+path and its `/api/analyze` call are tree-shaken out of the shipped JavaScript
+entirely. That deployment also cannot reach the real dataset — `.vercelignore`
+excludes `public/amazon-products.csv`, so it falls back to the synthetic
+`amazon-demo.csv`. The live site therefore demonstrates the rating-based engine
+over synthetic product records; the text-based engine over real ones is a local
+capability. The UI states which engine produced any given result rather than
+leaving a reader to assume.
+
 ### Engine 1 — Heuristic (default, no backend, fully static)
 
 A deterministic, rating-assisted engine (`src/services/analysisEngine.ts`)
