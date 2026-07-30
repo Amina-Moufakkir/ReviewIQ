@@ -158,20 +158,47 @@ ReviewIQ chooses its sentiment method by the **shape of the data**, because the
 two are not interchangeable.
 
 **Rating-based sentiment (heuristic engine)** infers praise/fault from the star
-rating. It is valid only when each review carries its OWN rating that reflects
-its OWN text — the built-in sample and the 204-review sample CSV. There it is
-fast, free, deterministic and accurate, and it is what powers the offline
-GitHub Pages demo, which has no server to call.
+rating. It is fast, free, deterministic and offline — it powers the GitHub Pages
+demo, which has no server to call — and it is a good approximation whenever a
+review's overall verdict matches its parts.
+
+Its limit is **structural, not a matter of tuning**. Polarity is read from the
+review's rating and applied to every theme that review mentions
+(`mentioning.filter(r => r.rating >= 4)`), so a single review cannot split: it is
+all praise or all fault. A review that likes one aspect and dislikes another is
+therefore misfiled, and the built-in sample already contains such reviews:
+
+> 2★ *"Kept dropping connection during video calls. When it works the sound is
+> genuinely good."* — Sound quality and Connectivity are **both** filed as
+> faults, though the sound is explicitly praised.
+
+> 4★ *"Delicious espresso and easy to froth milk. Cleaning takes effort but the
+> results are worth it."* — Coffee quality and Cleaning are **both** filed as
+> praise, though Cleaning is the complaint.
+
+A second blind spot follows from the same design: keyword matching has no notion
+of negation, so *"no problems with the battery"* inside a low-rated review counts
+as battery-fault evidence.
+
+So the accuracy claim is bounded. On per-review data the engine is right about
+most reviews, because most reviews are not mixed, and wrong about the mixed ones
+in proportion to how many there are. On product-average data it fails
+completely — one "review" is thousands of customers at once, and a single star
+value describes none of them individually.
 
 **Text-based sentiment (Claude engine)** reads the review body and assigns
-sentiment per theme mention. This is required for data where the rating does
-NOT track individual reviews — the Amazon dataset, whose rating is a
-product-AVERAGE over thousands of customers. On such data a rating-based engine
-goes blind: a complaint written inside a 4- or 5-star review, or inside an
-averaged 3-star record, is invisible to it. The Claude engine surfaces it
-because it reads the words. Here the average rating is shown only as CONTEXT in
-the header — labelled an averaged product rating — and never determines
-sentiment. It is not sent to the model at all.
+sentiment **per theme mention**, which is the difference that matters: one review
+can yield praise for one theme and a fault for another, because each mention is
+judged on its own words rather than inheriting a verdict from the row. That is
+the case the rating-based engine cannot represent at all.
+
+It is required for data where the rating does NOT track individual reviews — the
+Amazon dataset, whose rating is a product-AVERAGE over thousands of customers.
+There a rating-based engine goes blind: a complaint written inside a 4- or
+5-star review, or inside an averaged 3-star record, is invisible to it. The
+Claude engine surfaces it because it reads the words. The average rating is shown
+only as CONTEXT in the header — labelled an averaged product rating — and never
+determines sentiment. It is not sent to the model at all.
 
 A worked example, `7SEVEN Compatible LG TV Remote` (`B09F6D21BY`), one product
 record whose average is 3.0★. The heuristic engine returns no praise and no
@@ -185,11 +212,13 @@ produce a finding. The record actually reads:
 
 The Claude engine surfaces those as faults, each quoted verbatim from that text.
 
-**The rule:** match the engine to the data shape. Rating-based sentiment is
-legitimate when the rating represents the review; when it represents an average
-of many, derive sentiment from the text and demote the rating to displayed
-context. The `analyzeReviews()` boundary lets both engines coexist so the right
-one runs for the right data.
+**The rule:** match the engine to the data shape, and know what each costs.
+Rating-based sentiment is a reasonable approximation when one rating stands for
+one review's whole text, and it buys determinism, zero cost and offline
+operation for the price of getting mixed reviews wrong. When the rating stands
+for an average of many, that price becomes the whole answer: derive sentiment
+from the text and demote the rating to displayed context. The `analyzeReviews()`
+boundary lets both engines coexist so the right one runs for the right data.
 
 **Where this is verified, and where it is not.** The Claude engine is verified
 **locally only**, via `VITE_ANALYSIS_ENGINE=claude vercel dev`. It is **not

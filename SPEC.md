@@ -56,13 +56,19 @@ configuration rather than a user control. Both return the identical result
 shape, so the UI does not change between them.
 
 - **Heuristic engine** — deterministic keyword matching for themes, with
-  praise/fault inferred from the star rating. Valid only where each review
-  carries its own rating reflecting its own text. Free, offline, reproducible;
-  this is what the static demo deployment runs.
+  praise/fault inferred from the star rating. Free, offline, reproducible; this
+  is what the static demo deployment runs. Its limit is structural: polarity
+  comes from the review's rating and applies to every theme that review
+  mentions, so one review is all praise or all fault. A review that likes one
+  aspect and dislikes another is misfiled, which is a real if modest error rate
+  on per-review data and a total failure on product-average data, where one
+  rating stands for thousands of customers.
 - **Claude engine** — reads the review text and assigns sentiment per theme
-  mention. Required for data whose rating is a product average over many
-  customers, where a rating-based engine cannot see a complaint written inside a
-  highly-rated record. Calls a server function that holds the API key.
+  mention, so one review can yield praise for one theme and a fault for another.
+  That is the case the rating-based engine cannot represent. Required for data
+  whose rating is a product average over many customers, where a rating-based
+  engine cannot see a complaint written inside a highly-rated record. Calls a
+  server function that holds the API key.
 
 The Claude engine is currently verified locally only and is not enabled on the
 live deployment. The UI states which engine produced a given result, and an
