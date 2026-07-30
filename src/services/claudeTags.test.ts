@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   normalizeTheme,
   parseReviewRequest,
@@ -81,6 +83,38 @@ describe("validateTags — dedup and normalization", () => {
     );
     expect(valid).toHaveLength(1);
     expect(deduped).toBe(1);
+  });
+
+  // The dedup key joins {reviewId, themeKey, sentiment} with U+0000 precisely
+  // because that character cannot occur in any of the three: review ids come
+  // from the adapter, theme labels are model text that survived validation, and
+  // the sentiment is one of three literals. A printable separator such as a
+  // space would let distinct triples collide into one key and silently drop a
+  // real finding — these two tags share the concatenation "r1 battery life
+  // praise" but are NOT the same tag.
+  it("uses a separator that cannot collide across the key's three fields", () => {
+    const { valid, deduped } = validateTags(
+      [
+        { review_id: "r1", theme: "battery life", sentiment: "praise", evidence_span: "battery lasts for days" },
+        { review_id: "r1 battery", theme: "life", sentiment: "praise", evidence_span: "sturdy little thing" },
+      ],
+      new Map([
+        ["r1", "battery lasts for days"],
+        ["r1 battery", "sturdy little thing"],
+      ]),
+    );
+    expect(valid).toHaveLength(2);
+    expect(deduped).toBe(0);
+  });
+
+  // Guardrail for the separator's ENCODING, not its value. It is written as the
+  // escape `\u0000`; if an editor or tool ever rewrites that back to a literal
+  // NUL byte, the runtime behaviour is unchanged but git reclassifies the file
+  // as binary and every future diff becomes unreviewable.
+  it("keeps claudeTags.ts free of literal NUL bytes so it diffs as text", () => {
+    const source = readFileSync(join(process.cwd(), "src/services/claudeTags.ts"), "utf8");
+    expect(source).toContain("\\u0000");
+    expect(source.includes("\u0000")).toBe(false);
   });
 
   it("normalizes theme labels for casing and whitespace only", () => {
