@@ -204,10 +204,17 @@ therefore demonstrates the rating-based engine over synthetic product records;
 the text-based engine over real ones is a local capability. The UI states which
 engine produced any given result rather than leaving a reader to assume.
 
-Enabling Claude in production is a deliberate, separate step, not an oversight
-to be corrected in passing: it needs the build flag, a dataset the deployment
-can legitimately reach, and an accepted per-analysis API cost. None of those is
-decided here.
+**This is a settled decision, not a gap.** The live site stays heuristic-only
+and the Claude engine stays a locally verified capability. Three things drove it:
+the per-analysis API cost; the real dataset's unverified redistribution terms and
+reviewer PII, which keep it out of deployments regardless of engine; and an
+`/api/analyze` that has no authentication and would be publicly reachable through
+the production alias. `ANTHROPIC_API_KEY` is therefore set in **no** Vercel
+environment, and the deployed endpoint answers `500 server_misconfigured` by
+design — see [Secret configuration](#secret-configuration-local-only).
+
+Read an empty Vercel environment as the decision working, not as something to
+repair.
 
 **Determinism is the trade-off.** The heuristic engine is fully deterministic —
 identical input yields identical output — which is what makes it reproducible,
@@ -605,27 +612,41 @@ vercel link              # link this dir to the Vercel project (creates .vercel/
 vercel dev               # runs the frontend + /api together, loads Dev env vars
 ```
 
-To exercise the Claude engine locally, run with `VITE_ANALYSIS_ENGINE=claude`,
-e.g. `VITE_ANALYSIS_ENGINE=claude vercel dev`.
+To exercise the Claude engine locally, run with `VITE_ANALYSIS_ENGINE=claude`.
 
-**Where the key must live for `vercel dev`:** the `/api/analyze` **function**
-reads `ANTHROPIC_API_KEY` from Vercel's **Development**-scoped environment
-variables — set it there (`vercel env add ANTHROPIC_API_KEY development`) and
-`vercel dev` injects it into the function automatically. Note that a local
-`.env.local` file feeds the **frontend/build** but is **not** injected into the
-function runtime; if your key only lives in `.env.local`, load it into the shell
-first (`set -a; . ./.env.local; set +a; vercel dev`) or the function will return
-the controlled `500 server_misconfigured`.
+**Where the key must live for `vercel dev`:** in your shell, exported from
+`.env.local` — not in any Vercel environment, including Development. A local
+`.env.local` feeds the **frontend/build** but is **not** injected into the
+function runtime, so the function returns the controlled
+`500 server_misconfigured` unless you export it first. See
+[Secret configuration](#secret-configuration-local-only) for the exact command.
 
-### Production secret configuration
+### Secret configuration (local only)
 
-In the Vercel dashboard → **Settings → Environment Variables**, add
-`ANTHROPIC_API_KEY` (mark it **Sensitive**) scoped to **Production**,
-**Preview**, and **Development** (Development is what `vercel dev` loads). Also
-set `VITE_ANALYSIS_ENGINE=claude` for the Vercel deployment. Copy
-[`.env.example`](.env.example) if you keep a local file — it lists only
-`ANTHROPIC_API_KEY=` and local `.env*` files are gitignored. **After changing the
-production secret, redeploy before testing.**
+`ANTHROPIC_API_KEY` lives in your local `.env.local` and **nowhere on Vercel**.
+Copy [`.env.example`](.env.example) — it lists only `ANTHROPIC_API_KEY=`, and
+local `.env*` files are gitignored. `vercel dev` does not reliably pick the key
+up from `.env.local` on its own; export it into the process instead:
+
+```bash
+set -a && . ./.env.local && set +a
+VITE_ANALYSIS_ENGINE=claude ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" vercel dev
+```
+
+Do **not** add the key to any Vercel environment. The deployment is intended to
+run heuristic-only, and a configured `/api/analyze` on the production alias would
+be an unauthenticated, unrated-limited endpoint that anyone could spend the key
+through.
+
+Two things to know if that decision is ever revisited:
+
+- **Removing an env var does not take effect until you redeploy.** A running
+  function keeps the environment it was deployed with, so `vercel env rm` alone
+  leaves the old build fully functional on the live alias.
+- **Past deployments keep their own copy of the secret.** Direct `dpl_` URLs sit
+  behind Vercel Authentication (`401`), but a rollback to a keyed build would
+  repoint the public alias at it and re-expose the endpoint. Deployments built
+  while the key was set have been deleted for that reason.
 
 ### Deploy to Vercel
 
@@ -655,12 +676,13 @@ not a benchmarked one:
   theme clustering, correct per-mention sentiment on high-star reviews with real
   complaints, and exact evidence spans. For an MVP the bar is "does it work,"
   which Opus clears.
-- **Why it's low-risk to defer optimizing:** production runs the *heuristic*
-  engine (no Opus cost today — Claude is opt-in), and the model is a one-line
-  `ANTHROPIC_MODEL` override, so choosing a cheaper default later costs nothing
-  to change. **`claude-haiku-4-5`** and **`claude-sonnet-5`** are the obvious
-  cost/latency candidates.
-- **When to revisit:** once the Claude engine carries real traffic, benchmark a
+- **Why it's low-risk to defer optimizing:** the Claude engine runs only in local
+  development by decision, so the default model costs nothing in production
+  today, and it is a one-line `ANTHROPIC_MODEL` override whenever that changes.
+  **`claude-haiku-4-5`** and **`claude-sonnet-5`** are the obvious cost/latency
+  candidates.
+- **When to revisit:** only if the Claude engine ever carries real traffic, which
+  the current decision rules out. At that point, benchmark a
   fixed evaluation set across Haiku / Sonnet / Opus and judge on **canonical
   theme consistency, mixed-sentiment accuracy, evidence-span validity, latency,
   and cost** (evidence-span validity is scored deterministically by the existing
@@ -674,9 +696,13 @@ not a benchmarked one:
   `VITE_ANALYSIS_ENGINE`, so it ships the heuristic engine and never calls
   `/api/analyze`. Unaffected by any of the above.
 - **Vercel** — https://reviewiq-six.vercel.app/ — the frontend and the `/api/analyze`
-  function on one origin. The engine is env-controlled: it runs the heuristic engine
-  by default and switches to the Claude engine when `VITE_ANALYSIS_ENGINE=claude` +
-  `ANTHROPIC_API_KEY` are set. *(Currently deployed in heuristic mode.)*
+  function on one origin. The engine is env-controlled, and by decision neither
+  variable is set there: the deployment ships the **heuristic engine** over the
+  synthetic demo records, the Claude path is tree-shaken out of the bundle, and
+  the function — still deployed, since anything under `api/` is — answers
+  `500 server_misconfigured` because it has no key. Verified after each deploy.
+- **Local `vercel dev`** — the only place the Claude engine runs, over the real
+  dataset, with the key from `.env.local`.
 
 ## Tech
 
