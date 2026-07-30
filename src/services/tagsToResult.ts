@@ -2,6 +2,7 @@ import type { AnalysisInput, AnalysisResult, Finding, Product, Review, Sentiment
 import type { ValidatedTag } from "./claudeTags";
 import { attribution, buildSummary, minEvidenceFor } from "./analysisEngine";
 import { REVIEW, pluralize, type DatasetUnit } from "../lib/datasetInfo";
+import { lowerFirst } from "../lib/themeLabel";
 
 /**
  * Build an `AnalysisResult` from validated Claude tags. All counts, percentages,
@@ -95,9 +96,6 @@ function recommendationsFor(faults: Finding[], reviewCount: number, unit: Datase
   });
 }
 
-function lowerFirst(s: string): string {
-  return s.charAt(0).toLowerCase() + s.slice(1);
-}
 
 interface Group {
   /** Display label — the first original spelling seen for this normalized key. */
