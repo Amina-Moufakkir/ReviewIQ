@@ -149,14 +149,11 @@ describe("parseReviewRequest", () => {
   const ok = (...reviews: unknown[]) => parseReviewRequest({ reviews });
 
   it("accepts a well-formed request and narrows it", () => {
-    const result = ok(
-      { id: "r1", text: "Great sound", rating: 5 },
-      { id: "r2", text: "Meh" }, // rating optional
-    );
+    const result = ok({ id: "r1", text: "Great sound" }, { id: "r2", text: "Meh" });
     expect(Array.isArray(result)).toBe(true);
     expect(result).toEqual([
-      { id: "r1", text: "Great sound", rating: 5 },
-      { id: "r2", text: "Meh", rating: undefined },
+      { id: "r1", text: "Great sound" },
+      { id: "r2", text: "Meh" },
     ]);
   });
 
@@ -187,18 +184,14 @@ describe("parseReviewRequest", () => {
     expect(result).toMatchObject({ invalid: expect.stringContaining("duplicate") });
   });
 
-  it("rejects out-of-contract ratings (NaN, Infinity, non-integer, out of 1–5)", () => {
-    for (const rating of [NaN, Infinity, -Infinity, 0, 6, 400, 3.5, -1, "5", true]) {
-      expect(ok({ id: "r1", text: "t", rating }), `rating=${String(rating)}`).toMatchObject({
-        invalid: expect.any(String),
-      });
+  // Sentiment on this path comes from the text alone, so a rating is not part of
+  // the contract. An older client that still sends one must not be rejected, and
+  // the value must not survive into what the model is shown.
+  it("drops an inbound rating instead of forwarding or rejecting it", () => {
+    for (const rating of [1, 5, 0, 400, 3.5, NaN, Infinity, "5", true, null]) {
+      const result = ok({ id: "r1", text: "t", rating });
+      expect(Array.isArray(result), `rating=${String(rating)}`).toBe(true);
+      expect(result, `rating=${String(rating)}`).toEqual([{ id: "r1", text: "t" }]);
     }
-  });
-
-  it("accepts every valid integer rating and an omitted rating", () => {
-    for (const rating of [1, 2, 3, 4, 5]) {
-      expect(Array.isArray(ok({ id: "r1", text: "t", rating })), `rating=${rating}`).toBe(true);
-    }
-    expect(Array.isArray(ok({ id: "r1", text: "t" }))).toBe(true); // omitted
   });
 });

@@ -11,6 +11,8 @@ interface SentimentColumnProps {
   unit: DatasetUnit;
   /** Whether the analyzed dataset carried per-review dates. */
   hasDates: boolean;
+  /** Where the sentiment in `findings` came from — the text, or the star rating. */
+  sentimentSource: "text" | "rating";
 }
 
 /** One side of the balance-of-opinion ledger: evidence-backed findings. */
@@ -21,10 +23,17 @@ export function SentimentColumn({
   reviewCount,
   unit,
   hasDates,
+  sentimentSource,
 }: SentimentColumnProps) {
   const isPraise = tone === "praise";
   const accent = isPraise ? "text-praise" : "text-fault";
   const topBorder = isPraise ? "border-t-praise" : "border-t-fault";
+  // Rating-derived sentiment over product-level rows cannot see what customers
+  // wrote: the star value is an average over thousands of them, so a complaint
+  // inside a 4-star record never reaches this column. An empty column there is a
+  // statement about the ENGINE, not a finding about the product — say so, rather
+  // than let silence read as "no complaints".
+  const ratingBlind = sentimentSource === "rating" && unit.isProductLevel;
 
   return (
     <section className={`border-t-2 ${topBorder} bg-card p-5`}>
@@ -39,8 +48,19 @@ export function SentimentColumn({
 
       {findings.length === 0 ? (
         <p className="text-sm text-ink-soft">
-          No {isPraise ? "positive" : "negative"} themes have enough evidence{" "}
-          {scopeLabel(unit, hasDates)}.
+          {ratingBlind ? (
+            <>
+              Nothing surfaced — but this engine infers sentiment from the averaged product
+              rating, not from the review text, so {isPraise ? "praise" : "complaints"} written
+              inside these records cannot reach this column. Read that as a limit of the engine,
+              not as evidence there {isPraise ? "is none" : "are none"}.
+            </>
+          ) : (
+            <>
+              No {isPraise ? "positive" : "negative"} themes have enough evidence{" "}
+              {scopeLabel(unit, hasDates)}.
+            </>
+          )}
         </p>
       ) : (
         <ul className="flex flex-col gap-5">

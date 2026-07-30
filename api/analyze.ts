@@ -29,7 +29,7 @@ For the batch of reviews given, produce tags. Rules:
 - Identify specific product themes from the actual language customers use.
 - Cluster semantically equivalent descriptions under ONE concise, human-readable canonical theme label, and use that SAME label consistently across the entire batch (e.g. "died after a week", "won't hold a charge", and "battery's useless" all map to one battery-life theme).
 - Assign sentiment to each theme MENTION independently, from the review text: "praise", "fault", or "neutral". Sentiment belongs to the mention, not to the review as a whole — one review may praise one theme and fault another.
-- Star ratings are provided only as context. They must NOT determine a theme's sentiment, and must NEVER create a theme that the text does not support.
+- You are given review TEXT only — there are no star ratings in this input. Sentiment must come from the words themselves, and you must NEVER create a theme the text does not support.
 - Do not invent themes with no supporting text. Avoid vague labels like "quality", "positive", "negative", "product", or "general experience".
 - "evidence_span" MUST be an exact substring copied verbatim from that review's text (same casing and punctuation).
 - A single review may produce multiple tags.
@@ -143,10 +143,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
 // --- helpers ----------------------------------------------------------------
 
-/** The user turn: reviews as JSON, ratings included only as context. */
+/**
+ * The user turn: reviews as JSON, TEXT ONLY.
+ *
+ * Star ratings are deliberately absent. This path exists for data whose rating
+ * is a product-AVERAGE over thousands of customers, so it describes no single
+ * review's text and is evidence about no particular theme. Withholding it makes
+ * "sentiment comes from the text" a property of the input rather than a rule
+ * the prompt has to ask the model to respect.
+ */
 function buildUserContent(reviews: IncomingReview[]): string {
-  const payload = reviews.map((r) => ({ review_id: r.id, rating: r.rating, text: r.text }));
-  return `Reviews to tag (rating is context only, not a sentiment signal):\n${JSON.stringify(payload)}`;
+  const payload = reviews.map((r) => ({ review_id: r.id, text: r.text }));
+  return `Reviews to tag:\n${JSON.stringify(payload)}`;
 }
 
 function sendError(res: VercelResponse, status: number, code: string, message: string): void {

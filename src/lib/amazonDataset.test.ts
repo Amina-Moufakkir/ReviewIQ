@@ -101,8 +101,9 @@ function assertAdapterInvariants(name: string, result: AmazonAdapterResult) {
   it(`${name}: sends a body /api/analyze accepts, within its size limits`, () => {
     for (const product of dataset.products) {
       const matched = dataset.reviews.filter((r) => r.productId === product.id);
-      // Exactly the payload claudeEngine.ts builds from matched reviews.
-      const body = { reviews: matched.map((r) => ({ id: r.id, text: r.text, rating: r.rating })) };
+      // Exactly the payload claudeEngine.ts builds from matched reviews: text
+      // only, because sentiment on that path is derived from the words alone.
+      const body = { reviews: matched.map((r) => ({ id: r.id, text: r.text })) };
       expect(Array.isArray(parseReviewRequest(body)), `rejected for ${product.id}`).toBe(true);
       expect(matched.length).toBeLessThanOrEqual(MAX_REVIEWS_PER_REQUEST);
       const bytes = matched.reduce((sum, r) => sum + Buffer.byteLength(r.text, "utf8"), 0);
@@ -110,16 +111,28 @@ function assertAdapterInvariants(name: string, result: AmazonAdapterResult) {
     }
   });
 
-  it(`${name}: would be rejected outright if the decimal rating were sent unrounded`, () => {
-    // Why rounding is not optional: the endpoint's contract is integer 1–5, and
-    // neither the engine nor the endpoint may be modified to accept 4.2.
+  it(`${name}: never sends a rating to /api/analyze, decimal or otherwise`, () => {
+    // The product-average rating describes thousands of customers at once, so it
+    // is evidence about no single theme. It is not part of the request contract:
+    // a decimal average cannot reach the endpoint because no rating does.
     const decimal = dataset.reviews.find((r) => !Number.isInteger(r.sourceRating!));
     expect(decimal, "fixture should contain a decimal average").toBeDefined();
-    expect(
-      parseReviewRequest({
-        reviews: [{ id: decimal!.id, text: decimal!.text, rating: decimal!.sourceRating }],
-      }),
-    ).toEqual({ invalid: "rating must be an integer between 1 and 5" });
+    const parsed = parseReviewRequest({
+      reviews: [{ id: decimal!.id, text: decimal!.text, rating: decimal!.sourceRating }],
+    });
+    expect(Array.isArray(parsed)).toBe(true);
+    // The decimal is dropped rather than rejected, and never reaches the model.
+    expect(parsed).toEqual([{ id: decimal!.id, text: decimal!.text }]);
+  });
+
+  it(`${name}: still rounds the source decimal to the heuristic engine's 1–5 integer`, () => {
+    // Rounding remains non-optional for the OTHER engine: rating-based sentiment
+    // reads Review.rating, whose contract is an integer 1–5.
+    for (const review of dataset.reviews) {
+      expect(Number.isInteger(review.rating), `${review.id} rating=${review.rating}`).toBe(true);
+      expect(review.rating).toBeGreaterThanOrEqual(1);
+      expect(review.rating).toBeLessThanOrEqual(5);
+    }
   });
 
   it(`${name}: filters on the source decimal, excluding >= 3.5 and anything invalid`, () => {

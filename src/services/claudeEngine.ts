@@ -29,9 +29,11 @@ export async function analyzeWithClaude(
   // this is the legitimate empty state, not a fallback.
   if (matched.length === 0) return zeroResult(product, input, unitFor(dataset));
 
+  // Text only: sentiment on this path is derived from the review body, so the
+  // rating is not sent. See "Which engine for which data" in README.md.
   const body = JSON.stringify({
     productId: input.productId,
-    reviews: matched.map((r) => ({ id: r.id, text: r.text, rating: r.rating })),
+    reviews: matched.map((r) => ({ id: r.id, text: r.text })),
   });
 
   let response: Response;
