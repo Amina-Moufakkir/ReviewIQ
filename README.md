@@ -197,11 +197,38 @@ enabled on the live Vercel deployment**, which runs heuristic-only: the
 production bundle is built without `VITE_ANALYSIS_ENGINE=claude`, so the Claude
 path and its `/api/analyze` call are tree-shaken out of the shipped JavaScript
 entirely. That deployment also cannot reach the real dataset — `.vercelignore`
-excludes `public/amazon-products.csv`, so it falls back to the synthetic
-`amazon-demo.csv`. The live site therefore demonstrates the rating-based engine
-over synthetic product records; the text-based engine over real ones is a local
-capability. The UI states which engine produced any given result rather than
-leaving a reader to assume.
+excludes `public/amazon-products.csv`, because its redistribution terms are
+unverified and `src/amazon.csv` additionally carries real reviewer ids and
+names — so it falls back to the synthetic `amazon-demo.csv`. The live site
+therefore demonstrates the rating-based engine over synthetic product records;
+the text-based engine over real ones is a local capability. The UI states which
+engine produced any given result rather than leaving a reader to assume.
+
+Enabling Claude in production is a deliberate, separate step, not an oversight
+to be corrected in passing: it needs the build flag, a dataset the deployment
+can legitimately reach, and an accepted per-analysis API cost. None of those is
+decided here.
+
+**Determinism is the trade-off.** The heuristic engine is fully deterministic —
+identical input yields identical output — which is what makes it reproducible,
+unit-testable, and safe to assert on in CI. The Claude engine's theme
+*clustering* varies between runs. The same complaints surface and the quotes
+stay verbatim, but the model may group equivalent mentions into a different
+number of named themes, so per-theme counts are not reproducible run to run the
+way the heuristic engine's are.
+
+Observed on `B09F6D21BY`, same text, two consecutive runs: 7 faults / 2 praise,
+then 5 faults / 3 praise — the second run merged "ray pointer missing" and
+"voice recognition" into one theme. Every quote was an exact substring of the
+review text in both runs.
+
+Grounding is unaffected by this, and that is the point: what varies is how
+findings are *named and grouped*, never whether they trace to words a customer
+actually wrote. The evidence check in `claudeTags.ts` is a code-level gate, not
+a model instruction, so it holds regardless of how the model clusters. This
+variance is a property of using a language model, not a defect to engineer away
+— no temperature or seed tuning is applied to suppress it. Assert on grounding
+in tests, not on theme counts.
 
 ### Engine 1 — Heuristic (default, no backend, fully static)
 
