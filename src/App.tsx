@@ -15,6 +15,7 @@ import {
   unitFor,
 } from "./lib/datasetInfo";
 import { useAnalysis } from "./hooks/useAnalysis";
+import { ANALYSIS_ENGINE } from "./config";
 import { AnalyzeForm } from "./components/AnalyzeForm";
 import { DataSourceControl } from "./components/DataSourceControl";
 import { ResultsView } from "./components/ResultsView";
@@ -27,6 +28,13 @@ interface LoadedDataset {
 }
 
 const AMAZON_LOAD_ERROR = "Could not load the Amazon dataset.";
+
+/**
+ * What the active engine derives sentiment from. The Claude engine reads the
+ * review text; the heuristic engine infers it from each row's star rating. The
+ * UI states which, so a reader knows what an empty findings column means.
+ */
+const SENTIMENT_SOURCE: "text" | "rating" = ANALYSIS_ENGINE === "claude" ? "text" : "rating";
 
 const MISSING_DATASET_MESSAGE =
   `No Amazon data is available — neither the generated dataset nor the bundled ` +
@@ -305,14 +313,23 @@ export default function App() {
             ) : null}
 
             {state.status === "success" ? (
-              <ResultsView result={state.result} unit={unit} hasDates={hasReviewDates} />
+              <ResultsView
+                result={state.result}
+                unit={unit}
+                hasDates={hasReviewDates}
+                sentimentSource={SENTIMENT_SOURCE}
+              />
             ) : null}
           </div>
         </div>
 
         <footer className="mt-16 border-t border-rule pt-4">
           <p className="font-mono text-[11px] uppercase leading-relaxed tracking-[0.15em] text-ink-soft">
-            ReviewIQ · MVP · Heuristic, rating-assisted analysis over Amazon, sample or uploaded data
+            ReviewIQ · MVP ·{" "}
+            {SENTIMENT_SOURCE === "text"
+              ? "Claude, text-based sentiment"
+              : "Heuristic, rating-assisted analysis"}{" "}
+            over Amazon, sample or uploaded data
           </p>
         </footer>
       </div>

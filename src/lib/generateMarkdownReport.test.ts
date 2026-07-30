@@ -223,4 +223,17 @@ describe("markdown report — wording follows the dataset unit", () => {
     const asReviews = generateMarkdownReport(noFindings, GENERATED_ON, REVIEW);
     expect(asReviews).toContain("no recurring issues met the evidence threshold");
   });
+
+  // A product record's star value is an average over thousands of customers, so
+  // the report names it as such rather than calling it an average of the rows
+  // it analyzed. Per-review data keeps the plain label.
+  it("labels the rating an averaged product rating for product records", () => {
+    const asRecords = generateMarkdownReport(noFindings, GENERATED_ON, PRODUCT_RECORD);
+    expect(asRecords).toContain("**Averaged product rating:** 4.0/5");
+    expect(asRecords).not.toContain("**Average rating:**");
+
+    const asReviews = generateMarkdownReport(noFindings, GENERATED_ON, REVIEW);
+    expect(asReviews).toContain("**Average rating:** 4.0/5");
+    expect(asReviews).not.toContain("**Averaged product rating:**");
+  });
 });

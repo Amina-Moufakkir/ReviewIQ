@@ -84,7 +84,9 @@ export function generateMarkdownReport(
     "",
     ...(dated ? [`**Analysis window:** ${formatDate(result.from)} – ${formatDate(result.to)}  `] : []),
     `**${capitalize(unit.many)} analyzed:** ${result.reviewCount}  `,
-    `**Average rating:** ${result.averageRating.toFixed(1)}/5`,
+    // Product-level rows carry a product-AVERAGE rating over thousands of
+    // customers, so "average rating" alone understates what the number is.
+    `**${unit.isProductLevel ? "Averaged product rating" : "Average rating"}:** ${result.averageRating.toFixed(1)}/5`,
     ...(unit.isProductLevel
       ? [
           "",

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   normalizeTheme,
   parseReviewRequest,
@@ -83,6 +85,38 @@ describe("validateTags — dedup and normalization", () => {
     expect(deduped).toBe(1);
   });
 
+  // The dedup key joins {reviewId, themeKey, sentiment} with U+0000 precisely
+  // because that character cannot occur in any of the three: review ids come
+  // from the adapter, theme labels are model text that survived validation, and
+  // the sentiment is one of three literals. A printable separator such as a
+  // space would let distinct triples collide into one key and silently drop a
+  // real finding — these two tags share the concatenation "r1 battery life
+  // praise" but are NOT the same tag.
+  it("uses a separator that cannot collide across the key's three fields", () => {
+    const { valid, deduped } = validateTags(
+      [
+        { review_id: "r1", theme: "battery life", sentiment: "praise", evidence_span: "battery lasts for days" },
+        { review_id: "r1 battery", theme: "life", sentiment: "praise", evidence_span: "sturdy little thing" },
+      ],
+      new Map([
+        ["r1", "battery lasts for days"],
+        ["r1 battery", "sturdy little thing"],
+      ]),
+    );
+    expect(valid).toHaveLength(2);
+    expect(deduped).toBe(0);
+  });
+
+  // Guardrail for the separator's ENCODING, not its value. It is written as the
+  // escape `\u0000`; if an editor or tool ever rewrites that back to a literal
+  // NUL byte, the runtime behaviour is unchanged but git reclassifies the file
+  // as binary and every future diff becomes unreviewable.
+  it("keeps claudeTags.ts free of literal NUL bytes so it diffs as text", () => {
+    const source = readFileSync(join(process.cwd(), "src/services/claudeTags.ts"), "utf8");
+    expect(source).toContain("\\u0000");
+    expect(source.includes("\u0000")).toBe(false);
+  });
+
   it("normalizes theme labels for casing and whitespace only", () => {
     expect(normalizeTheme("Battery Life")).toBe("battery life");
     expect(normalizeTheme("  battery   life ")).toBe("battery life");
@@ -149,14 +183,11 @@ describe("parseReviewRequest", () => {
   const ok = (...reviews: unknown[]) => parseReviewRequest({ reviews });
 
   it("accepts a well-formed request and narrows it", () => {
-    const result = ok(
-      { id: "r1", text: "Great sound", rating: 5 },
-      { id: "r2", text: "Meh" }, // rating optional
-    );
+    const result = ok({ id: "r1", text: "Great sound" }, { id: "r2", text: "Meh" });
     expect(Array.isArray(result)).toBe(true);
     expect(result).toEqual([
-      { id: "r1", text: "Great sound", rating: 5 },
-      { id: "r2", text: "Meh", rating: undefined },
+      { id: "r1", text: "Great sound" },
+      { id: "r2", text: "Meh" },
     ]);
   });
 
@@ -187,18 +218,14 @@ describe("parseReviewRequest", () => {
     expect(result).toMatchObject({ invalid: expect.stringContaining("duplicate") });
   });
 
-  it("rejects out-of-contract ratings (NaN, Infinity, non-integer, out of 1–5)", () => {
-    for (const rating of [NaN, Infinity, -Infinity, 0, 6, 400, 3.5, -1, "5", true]) {
-      expect(ok({ id: "r1", text: "t", rating }), `rating=${String(rating)}`).toMatchObject({
-        invalid: expect.any(String),
-      });
+  // Sentiment on this path comes from the text alone, so a rating is not part of
+  // the contract. An older client that still sends one must not be rejected, and
+  // the value must not survive into what the model is shown.
+  it("drops an inbound rating instead of forwarding or rejecting it", () => {
+    for (const rating of [1, 5, 0, 400, 3.5, NaN, Infinity, "5", true, null]) {
+      const result = ok({ id: "r1", text: "t", rating });
+      expect(Array.isArray(result), `rating=${String(rating)}`).toBe(true);
+      expect(result, `rating=${String(rating)}`).toEqual([{ id: "r1", text: "t" }]);
     }
-  });
-
-  it("accepts every valid integer rating and an omitted rating", () => {
-    for (const rating of [1, 2, 3, 4, 5]) {
-      expect(Array.isArray(ok({ id: "r1", text: "t", rating })), `rating=${rating}`).toBe(true);
-    }
-    expect(Array.isArray(ok({ id: "r1", text: "t" }))).toBe(true); // omitted
   });
 });

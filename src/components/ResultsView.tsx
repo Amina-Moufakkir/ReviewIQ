@@ -13,12 +13,19 @@ interface ResultsViewProps {
   unit: DatasetUnit;
   /** Whether the analyzed dataset carried per-review dates. */
   hasDates: boolean;
+  /**
+   * Where the displayed sentiment came from. "text" = the Claude engine read the
+   * review bodies; "rating" = the heuristic engine inferred it from each row's
+   * own star rating. It changes only what the header CLAIMS about the average
+   * rating — never what is classified.
+   */
+  sentimentSource: "text" | "rating";
 }
 
 type Toast = { message: string; tone: "success" | "error" };
 
 /** The full sentiment brief: findings lede, ledger, themes, recommendations. */
-export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
+export function ResultsView({ result, unit, hasDates, sentimentSource }: ResultsViewProps) {
   // Combined at-a-glance theme list, most-mentioned first.
   const themes: Finding[] = [...result.praise, ...result.faults].sort(
     (a, b) => b.mentions - a.mentions || a.label.localeCompare(b.label),
@@ -86,7 +93,8 @@ export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
           {result.productName}
         </h2>
         <p className="mt-3 font-mono text-xs text-ink-soft">
-          {formatCount(result.reviewCount, unit)} · {result.averageRating.toFixed(1)}★ avg
+          {formatCount(result.reviewCount, unit)} · {result.averageRating.toFixed(1)}★{" "}
+          {unit.isProductLevel ? "averaged product rating" : "avg"}
           {dateRangeSuffix(result.from, result.to, hasDates)}
         </p>
         <p className="mt-4 max-w-2xl font-display text-lg leading-relaxed text-ink">
@@ -101,7 +109,10 @@ export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
             bundles several customers' reviews and whose star value is a product-average rounded to a
             whole star. Counts and percentages are shares of product records, not of customers
             {hasDates ? "" : ', and "this window" is the whole dataset — these records carry no dates'}
-            .
+            .{" "}
+            {sentimentSource === "text"
+              ? "Praise and faults below are read from the review text; the averaged rating above is shown as context only and never decides which column a theme lands in."
+              : "Praise and faults below are inferred from that averaged rating rather than from the review text — see each column for what that engine can and cannot see."}
           </p>
         ) : null}
       </header>
@@ -117,6 +128,7 @@ export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
             reviewCount={result.reviewCount}
             unit={unit}
             hasDates={hasDates}
+            sentimentSource={sentimentSource}
           />
           <SentimentColumn
             tone="fault"
@@ -125,6 +137,7 @@ export function ResultsView({ result, unit, hasDates }: ResultsViewProps) {
             reviewCount={result.reviewCount}
             unit={unit}
             hasDates={hasDates}
+            sentimentSource={sentimentSource}
           />
         </div>
       </div>
