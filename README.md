@@ -440,10 +440,13 @@ as here, because technical compatibility is not analytical validity.
   records versus 2 — an artifact of averaging thousands of customers into one
   number, not a finding about the products. **The evidence threshold does not
   fix this**: with one-record evidence, praise appears for 1,149 products but
-  faults for 1, and recommendations (which derive from faults) stay empty. A
-  rating-driven engine cannot find complaints in data whose ratings are product
-  averages. The Claude engine reads the text instead and does surface faults —
-  see [Why the second engine exists](#why-the-second-engine-exists).
+  faults for 1, and recommendations (which derive from faults) stay empty for
+  1,349 of 1,350 products. A rating-driven engine cannot find complaints in data
+  whose ratings are product averages. The Claude engine reads the text instead,
+  surfaces the faults, and therefore produces the recommended actions too — see
+  [Why the second engine exists](#why-the-second-engine-exists). Both engines
+  say so in the UI: an empty Recommendations section under the rating-based
+  engine states that complaints were not *detected*, never that there are none.
 - **No dates.** The dataset has no date field of any kind. No date is invented,
   derived, or substituted — records are undated (`date: ""`), and the date
   window is hidden rather than shown empty or pre-filled.

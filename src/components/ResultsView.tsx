@@ -43,7 +43,7 @@ export function ResultsView({ result, unit, hasDates, sentimentSource }: Results
 
   async function handleCopyReport() {
     try {
-      await copyReportToClipboard(generateMarkdownReport(result, undefined, unit));
+      await copyReportToClipboard(generateMarkdownReport(result, undefined, unit, sentimentSource));
       setToast({ message: "Report copied", tone: "success" });
     } catch {
       setToast({ message: "Could not copy report", tone: "error" });
@@ -184,7 +184,19 @@ export function ResultsView({ result, unit, hasDates, sentimentSource }: Results
         <SectionLabel>Recommended actions</SectionLabel>
         {result.recommendations.length === 0 ? (
           <p className="text-sm text-ink-soft">
-            No actions recommended — no {themePhrase(unit, "complaints")} {scopeLabel(unit, hasDates)}.
+            {sentimentSource === "rating" && unit.isProductLevel ? (
+              <>
+                No actions recommended. Actions are derived from faults, and this engine infers
+                sentiment from the averaged product rating rather than the review text, so
+                complaints written inside these records are not detected — a limit of the engine,
+                not evidence there are none.
+              </>
+            ) : (
+              <>
+                No actions recommended — no {themePhrase(unit, "complaints")}{" "}
+                {scopeLabel(unit, hasDates)}.
+              </>
+            )}
           </p>
         ) : (
           <ol className="border-y border-rule">

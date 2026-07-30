@@ -1,7 +1,7 @@
 import type { AnalysisInput, AnalysisResult, Finding, Product, Review, Sentiment } from "../types";
 import type { ValidatedTag } from "./claudeTags";
 import { attribution, buildSummary, minEvidenceFor } from "./analysisEngine";
-import { REVIEW, type DatasetUnit } from "../lib/datasetInfo";
+import { REVIEW, pluralize, type DatasetUnit } from "../lib/datasetInfo";
 
 /**
  * Build an `AnalysisResult` from validated Claude tags. All counts, percentages,
@@ -9,9 +9,8 @@ import { REVIEW, type DatasetUnit } from "../lib/datasetInfo";
  * model wrote. The result satisfies the same contract the heuristic engine does,
  * so the UI is unchanged.
  *
- * Recommendations are intentionally empty in Claude mode: the engine is a
- * semantic tagging layer, not a report generator, and dynamic themes have no
- * entry in the (heuristic) recommendation library.
+ * Recommendations are derived from the fault findings (see `recommendationsFor`)
+ * rather than written by the model.
  */
 export function tagsToResult(
   input: AnalysisInput,
@@ -46,7 +45,7 @@ export function tagsToResult(
     ),
     praise,
     faults,
-    recommendations: [],
+    recommendations: recommendationsFor(faults, reviewCount, unit),
   };
 }
 
@@ -66,6 +65,39 @@ export function zeroResult(product: Product, input: AnalysisInput, unit: Dataset
 }
 
 // --- internal helpers -------------------------------------------------------
+
+/**
+ * Actions for dynamic themes.
+ *
+ * The heuristic engine reads a curated line off THEME_LIBRARY, keyed by a fixed
+ * label. Claude's themes are free-form ("ray pointer missing"), so that library
+ * has no entry for them — which is why this used to return nothing at all, even
+ * for a record whose text was full of complaints.
+ *
+ * The model is NOT asked to write the advice. It is a tagging layer, and prose
+ * it invents would be grounded in nothing a customer wrote. Each action is
+ * assembled here from values that already passed a gate: the theme label the
+ * model assigned to text it had to quote verbatim, and the support count this
+ * code computed from unique supporting reviews. Faults arrive sorted by
+ * mentions, so actions come out in the order the fault column shows them —
+ * best-supported complaint first, which is the order an analyst should work in.
+ *
+ * These are prompts for an analyst to investigate, not conclusions. That is the
+ * same thing THEME_LIBRARY's `recommendation` claims to be.
+ */
+function recommendationsFor(faults: Finding[], reviewCount: number, unit: DatasetUnit): string[] {
+  return faults.map((fault) => {
+    const support =
+      reviewCount === 1
+        ? `the selected ${unit.one}`
+        : `${fault.mentions} of ${reviewCount} ${pluralize(reviewCount, unit)}`;
+    return `Investigate ${lowerFirst(fault.label)} — raised in ${support}.`;
+  });
+}
+
+function lowerFirst(s: string): string {
+  return s.charAt(0).toLowerCase() + s.slice(1);
+}
 
 interface Group {
   /** Display label — the first original spelling seen for this normalized key. */

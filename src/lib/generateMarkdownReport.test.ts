@@ -224,6 +224,24 @@ describe("markdown report — wording follows the dataset unit", () => {
     expect(asReviews).toContain("no recurring issues met the evidence threshold");
   });
 
+  // An empty Recommendations section must not read as "we looked and found no
+  // complaints" when the engine could not look at the text in the first place.
+  it("says why Recommendations is empty when a rating-based engine reads product records", () => {
+    const blind = generateMarkdownReport(noFindings, GENERATED_ON, PRODUCT_RECORD, "rating");
+    expect(blind).toContain("a limit of the engine, not evidence there are none");
+    expect(blind).not.toContain("met the evidence threshold.");
+
+    // The text-based engine genuinely looked, so the threshold wording stands.
+    const read = generateMarkdownReport(noFindings, GENERATED_ON, PRODUCT_RECORD, "text");
+    expect(read).toContain("met the evidence threshold");
+    expect(read).not.toContain("a limit of the engine");
+
+    // Per-review data keeps the original wording under either engine.
+    const perReview = generateMarkdownReport(noFindings, GENERATED_ON, REVIEW, "rating");
+    expect(perReview).toContain("no recurring issues met the evidence threshold");
+    expect(perReview).not.toContain("a limit of the engine");
+  });
+
   // A product record's star value is an average over thousands of customers, so
   // the report names it as such rather than calling it an average of the rows
   // it analyzed. Per-review data keeps the plain label.
