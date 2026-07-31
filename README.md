@@ -1,5 +1,10 @@
 # ReviewIQ
 
+## About
+
+Built by Amina Moufakkir as a project for the
+[Pursuit](https://www.pursuit.org) **AI-Native Program**.
+
 **Live demo (GitHub Pages, heuristic) → https://amina-moufakkir.github.io/ReviewIQ/**
 
 **Vercel (same-origin app + `/api`) → https://reviewiq-six.vercel.app/**
