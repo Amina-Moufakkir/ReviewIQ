@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import type { AnalysisInput, Product, Review } from "../types";
 import { analyze, selectForScope, AnalysisError } from "./analysisEngine";
 import { categoriesIn, PRODUCT_RECORD, REVIEW } from "../lib/datasetInfo";
+import { topLevelCategory } from "../lib/categoryKey";
+import { products as builtInProducts } from "../data/products";
 import type { Dataset } from "../types";
 
 /**
@@ -151,6 +153,28 @@ describe("analyze at category scope — the unit is unchanged by widening", () =
   it("reports the category as the subject in the result", () => {
     const result = analyze(category("Electronics", WIDE.from, WIDE.to), REVIEWS, PRODUCTS, REVIEW);
     expect(result.productName).toBe("Electronics");
+  });
+});
+
+/**
+ * The built-in catalog is the one place `topCategory` is hand-written rather
+ * than derived, so it is the one place it can be wrong. Its categories are flat,
+ * which makes the invariant exact: for a flat value the top level IS the value.
+ *
+ * Without this, adding a product with a piped category — or simply mistyping
+ * `topCategory` — would compile, pass every other test, and quietly drop that
+ * product out of its category in the picker.
+ */
+describe("built-in catalog — the hand-written topCategory values", () => {
+  it("derives to itself, because its categories are flat", () => {
+    for (const product of builtInProducts) {
+      expect(product.topCategory, `${product.id}`).toBe(topLevelCategory(product.category));
+      expect(product.topCategory, `${product.id}`).toBe(product.category);
+    }
+  });
+
+  it("gives every product a non-empty key, so none is unreachable by category", () => {
+    expect(builtInProducts.every((p) => p.topCategory.trim() !== "")).toBe(true);
   });
 });
 
