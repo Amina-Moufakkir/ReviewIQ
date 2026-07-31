@@ -7,7 +7,7 @@ Built by Amina Moufakkir as a project for the
 
 **Live demo (GitHub Pages, heuristic) → https://amina-moufakkir.github.io/ReviewIQ/**
 
-**Vercel (same-origin app + `/api`) → https://reviewiq-six.vercel.app/**
+**Vercel (heuristic-only; `/api/analyze` deployed but intentionally keyless) → https://reviewiq-six.vercel.app/**
 
 > The public demo uses a small **synthetic Amazon-style dataset**, so the full
 > integration can be explored without redistributing the original data. Local
@@ -258,10 +258,10 @@ stay verbatim, but the model may group equivalent mentions into a different
 number of named themes, so per-theme counts are not reproducible run to run the
 way the heuristic engine's are.
 
-Observed on `B09F6D21BY`, same text, two consecutive runs: 7 faults / 2 praise,
-then 5 faults / 3 praise — the second run merged "ray pointer missing" and
-"voice recognition" into one theme. Every quote was an exact substring of the
-review text in both runs.
+Observed on `B09F6D21BY`, same text, three runs: 7 faults / 2 praise, then
+5 faults / 3 praise, then 7 faults / 3 praise — the second run merged "ray
+pointer missing" and "voice recognition" into one theme. Every quote was an
+exact substring of the review text in all three runs.
 
 Grounding is unaffected by this, and that is the point: what varies is how
 findings are *named and grouped*, never whether they trace to words a customer
@@ -595,8 +595,13 @@ as here, because technical compatibility is not analytical validity.
   average rating to the nearest integer for compatibility while preserving the
   original decimal value in `Review.sourceRating`. *This is a compatibility
   transformation, not a claim that the average rating was originally an
-  integer.* Rounding is not optional: the loader rejects non-integers, and so
-  does the `/api/analyze` request contract, and neither may be modified.
+  integer.* Rounding is not optional: the shared loader rejects a non-integer
+  rating, and that check may not be relaxed. The loader is the only place that
+  enforces it, by design — the `/api/analyze` contract once rejected non-integer
+  ratings too, but that request no longer carries a rating at all: the field was
+  removed deliberately so the model cannot be influenced by it (see
+  [The pipeline](#the-pipeline)). Rounding rests on the loader alone, and that
+  is the settled arrangement, not a gap left by the change.
 - **One record per product, mostly.** 1,258 of the 1,350 products have exactly
   one record (70 have two, 22 have three). This is why the evidence threshold is
   per-unit: at two rows, 93% of products could not produce a theme *in
@@ -741,8 +746,9 @@ language, clusters equivalent
 descriptions under one canonical label, and assigns sentiment per theme mention
 with the exact supporting text span. **All counts, percentages, thresholds, and
 the summary are still computed in TypeScript** — the model judges language, code
-computes evidence. Star ratings are passed only as context and never determine
-sentiment.
+computes evidence. **The star rating is never sent to the model**, so it cannot
+influence sentiment at all: the request carries `id` and `text` only. That is a
+structural guarantee, not an instruction the prompt asks the model to respect.
 
 ### Architecture (same-origin, key stays server-side)
 

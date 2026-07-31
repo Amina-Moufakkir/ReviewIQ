@@ -24,9 +24,15 @@ Build the smallest possible MVP that proves AI can summarize customer reviews in
 User:
 
 1. Selects product
-2. Selects date range
+2. Selects a date range — only when the data carries per-review dates; the
+   control is hidden for undated data rather than shown empty
 3. Clicks Analyze
-4. Receives AI summary
+4. Receives a structured brief: summary, top complaints, top positive themes,
+   recommended actions, and a promotions panel when the data supports it
+
+The brief is engine-neutral. Two engines produce it — a deterministic heuristic
+one and a Claude-powered semantic one — and the UI states which one ran, so
+"AI summary" is wrong for the heuristic path, which uses no model.
 
 ## Don't Build Yet
 
@@ -36,5 +42,6 @@ User:
 - Dashboards
 - Charts
 - Notifications
-- Export
+- File export — downloads, DOCX, CSV. (Copying the report as Markdown to the
+  clipboard is IN scope and already shipped; see SPEC.md "Out of Scope".)
 - Analytics

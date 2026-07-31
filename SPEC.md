@@ -68,7 +68,9 @@ shape, so the UI does not change between them.
   That is the case the rating-based engine cannot represent. Required for data
   whose rating is a product average over many customers, where a rating-based
   engine cannot see a complaint written inside a highly-rated record. Calls a
-  server function that holds the API key.
+  server function that holds the API key **in local development only** — the
+  deployed function is keyless by decision and answers
+  `500 server_misconfigured`.
 
 The Claude engine is currently verified locally only and is not enabled on the
 live deployment. The UI states which engine produced a given result, and an
