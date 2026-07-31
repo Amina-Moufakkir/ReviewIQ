@@ -1,8 +1,13 @@
 # ReviewIQ
 
+## About
+
+Built by Amina Moufakkir as a project for the
+[Pursuit](https://www.pursuit.org) **AI-Native Program**.
+
 **Live demo (GitHub Pages, heuristic) → https://amina-moufakkir.github.io/ReviewIQ/**
 
-**Vercel (same-origin app + `/api`) → https://reviewiq-six.vercel.app/**
+**Vercel (heuristic-only; `/api/analyze` deployed but intentionally keyless) → https://reviewiq-six.vercel.app/**
 
 > The public demo uses a small **synthetic Amazon-style dataset**, so the full
 > integration can be explored without redistributing the original data. Local
@@ -253,10 +258,10 @@ stay verbatim, but the model may group equivalent mentions into a different
 number of named themes, so per-theme counts are not reproducible run to run the
 way the heuristic engine's are.
 
-Observed on `B09F6D21BY`, same text, two consecutive runs: 7 faults / 2 praise,
-then 5 faults / 3 praise — the second run merged "ray pointer missing" and
-"voice recognition" into one theme. Every quote was an exact substring of the
-review text in both runs.
+Observed on `B09F6D21BY`, same text, three runs: 7 faults / 2 praise, then
+5 faults / 3 praise, then 7 faults / 3 praise — the second run merged "ray
+pointer missing" and "voice recognition" into one theme. Every quote was an
+exact substring of the review text in all three runs.
 
 Grounding is unaffected by this, and that is the point: what varies is how
 findings are *named and grouped*, never whether they trace to words a customer
@@ -396,10 +401,15 @@ set on the Amazon data is the benchmark still deferred below.)
 ### Security model
 
 The Claude call runs **server-side only**, in a Vercel serverless function at
-`api/analyze.ts`. The `ANTHROPIC_API_KEY` lives only in the server environment
-(a Vercel Environment Variable), is never bundled into the browser, and is never
-prefixed `VITE_`. The browser sends the filtered reviews to `/api/analyze` and
-receives back validated tags or a controlled error.
+`api/analyze.ts`. The `ANTHROPIC_API_KEY` is read only via `process.env` inside
+that function — it is never bundled into the browser and never prefixed `VITE_`.
+By decision, the key is set in **no Vercel environment**; it lives only in a
+local `.env.local` for `vercel dev`, so the deployed `/api/analyze` answers a
+controlled `500 server_misconfigured` rather than running. See
+[Secret configuration (local only)](#secret-configuration-local-only) and
+[Where this is verified, and where it is not](#which-engine-for-which-data) for
+why the live endpoint is intentionally keyless. The browser sends the filtered
+reviews to `/api/analyze` and receives back validated tags or a controlled error.
 
 ### Selecting an engine
 
@@ -409,6 +419,11 @@ Set `VITE_ANALYSIS_ENGINE` in the environment:
 | ----------- | --------- | ------------------------------------ |
 | `heuristic` | Engine 1  | Browser only (GitHub Pages demo)     |
 | `claude`    | Engine 2  | Vercel (`api/analyze.ts`) + browser  |
+
+> **Note:** the `claude` row describes where the engine runs *when enabled*. In
+> this project it is enabled **only in local `vercel dev`** — never on the live
+> Vercel deployment, which ships heuristic-only with no key. See
+> [How the two deployments coexist](#how-the-two-deployments-coexist).
 
 `VITE_ANALYSIS_ENGINE` carries only the engine name — it is **not** a secret and
 contains no key. When Claude mode is selected and the call fails, the app
@@ -580,8 +595,13 @@ as here, because technical compatibility is not analytical validity.
   average rating to the nearest integer for compatibility while preserving the
   original decimal value in `Review.sourceRating`. *This is a compatibility
   transformation, not a claim that the average rating was originally an
-  integer.* Rounding is not optional: the loader rejects non-integers, and so
-  does the `/api/analyze` request contract, and neither may be modified.
+  integer.* Rounding is not optional: the shared loader rejects a non-integer
+  rating, and that check may not be relaxed. The loader is the only place that
+  enforces it, by design — the `/api/analyze` contract once rejected non-integer
+  ratings too, but that request no longer carries a rating at all: the field was
+  removed deliberately so the model cannot be influenced by it (see
+  [The pipeline](#the-pipeline)). Rounding rests on the loader alone, and that
+  is the settled arrangement, not a gap left by the change.
 - **One record per product, mostly.** 1,258 of the 1,350 products have exactly
   one record (70 have two, 22 have three). This is why the evidence threshold is
   per-unit: at two rows, 93% of products could not produce a theme *in
@@ -726,8 +746,9 @@ language, clusters equivalent
 descriptions under one canonical label, and assigns sentiment per theme mention
 with the exact supporting text span. **All counts, percentages, thresholds, and
 the summary are still computed in TypeScript** — the model judges language, code
-computes evidence. Star ratings are passed only as context and never determine
-sentiment.
+computes evidence. **The star rating is never sent to the model**, so it cannot
+influence sentiment at all: the request carries `id` and `text` only. That is a
+structural guarantee, not an instruction the prompt asks the model to respect.
 
 ### Architecture (same-origin, key stays server-side)
 
@@ -874,3 +895,15 @@ CSV upload, and a deterministic heuristic engine, plus an optional
 Claude-powered semantic-tagging engine behind the same `analyzeReviews()`
 boundary (server-side key, controlled errors, identical UI and
 `AnalysisResult`). Engine chosen by `VITE_ANALYSIS_ENGINE`.
+
+## License
+
+ReviewIQ's own source code is released under the **MIT License** — see
+[`LICENSE`](LICENSE). This covers the code in this repository only.
+
+It does **not** cover the Amazon Sales Dataset, which is a separate work under
+its own terms (CC BY-NC-SA 4.0 as tagged on Kaggle) and is deliberately **not
+redistributed** here — no raw file, generated fixture, or excerpt. See
+[Source, licence and attribution](#source-licence-and-attribution) for the
+reasoning. The synthetic `amazon-demo.csv` and `sample-reviews.csv` are original
+to this project and fall under the MIT license above.
