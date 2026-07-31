@@ -140,6 +140,13 @@ export interface PromotionInsight {
 
 /** Structured output of an analysis run — all derived from matched reviews. */
 export interface AnalysisResult {
+  /**
+   * What the run was about. Under category scope this holds the CATEGORY name,
+   * not a product name — the field predates scopes and was deliberately left
+   * unchanged rather than widening this contract. Callers that need to tell the
+   * two apart are passed the scope separately (see `ResultsView`), and an
+   * optional `scopeLabel` here is the clean fix if the contract is ever opened.
+   */
   productName: string;
   from: string;
   to: string;

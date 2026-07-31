@@ -128,8 +128,16 @@ export function selectForScope(
 
   const ids = new Set(inCategory.map((p) => p.id));
   return {
-    // The category stands in for a product. Its own category fields are itself:
-    // a category belongs to nothing above it.
+    // DELIBERATE, not a bug to tidy up: at category scope every field carries
+    // the category label. `name` flows into `AnalysisResult.productName`, so
+    // that field holds "Electronics" rather than a product name — a knowing
+    // trade for leaving the AnalysisResult contract untouched. Nothing
+    // user-facing is ambiguous: the header and the copied report both state the
+    // scope. The clean fix, if that contract is ever opened, is an optional
+    // `scopeLabel` on AnalysisResult — not a rename here.
+    //
+    // `category`/`topCategory` are the category itself because a category
+    // belongs to nothing above it.
     subject: {
       id: scope.category,
       name: scope.category,
