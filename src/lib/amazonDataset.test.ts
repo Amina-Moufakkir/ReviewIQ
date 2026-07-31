@@ -223,6 +223,22 @@ describe("Amazon adapter — synthetic fixture specifics", () => {
     expect(rec.category).toBe("USBCables");
   });
 
+  // The grouping key must reach the Product, since that is what category scope
+  // reads — categoryPath lives on AmazonRecord, which callers discard.
+  it("puts the record's top-level category on the product it produces", () => {
+    const rec = mini.records[0]!;
+    const product = mini.dataset.products.find((p) => p.id === rec.productId)!;
+    expect(product.topCategory).toBe(rec.categoryPath[0]);
+    expect(product.category).toBe(rec.category);
+  });
+
+  it("groups many leaves under far fewer top-level categories", () => {
+    const leaves = new Set(mini.dataset.products.map((p) => p.category));
+    const tops = new Set(mini.dataset.products.map((p) => p.topCategory));
+    expect(tops.size).toBeLessThan(leaves.size);
+    expect([...tops].every(Boolean)).toBe(true);
+  });
+
   it("keeps commas and escaped quotes inside the text intact", () => {
     expect(mini.dataset.reviews[0]!.text).toContain("Charging is fast, and the braid feels solid.");
     const press = mini.dataset.reviews.find((r) => r.productId === "SYN0000005")!;

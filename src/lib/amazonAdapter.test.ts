@@ -48,6 +48,16 @@ describe("adaptAmazonCsv — mapping", () => {
     expect(dataset.reviews[0]!.category).toBe("Cables");
     expect(dataset.products[0]!.category).toBe("Cables");
   });
+
+  // The adapter used to hand the loader only the leaf, which discarded the top
+  // level entirely — leaving nothing for category scope to group on.
+  it("carries the TOP-LEVEL category through to the product, not just the leaf", () => {
+    const { dataset } = adaptAmazonCsv(csv(ROW_A), "f.csv");
+    expect(dataset.products[0]!.topCategory).toBe("Electronics");
+    // Both ends of the path survive, and they are genuinely different.
+    expect(dataset.products[0]!.category).toBe("Cables");
+    expect(dataset.products[0]!.topCategory).not.toBe(dataset.products[0]!.category);
+  });
 });
 
 describe("adaptAmazonCsv — normalization", () => {

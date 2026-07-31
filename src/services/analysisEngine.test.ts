@@ -12,8 +12,8 @@ import { PRODUCT_RECORD, REVIEW } from "../lib/datasetInfo";
 
 const PRODUCT_ID = "widget-01";
 const PRODUCTS: Product[] = [
-  { id: PRODUCT_ID, name: "Test Widget", category: "Electronics" },
-  { id: "other-01", name: "Other Widget", category: "Electronics" },
+  { id: PRODUCT_ID, name: "Test Widget", category: "Electronics", topCategory: "Electronics" },
+  { id: "other-01", name: "Other Widget", category: "Electronics", topCategory: "Electronics" },
 ];
 
 // Helper to build reviews. Text is written so keywords land on known library

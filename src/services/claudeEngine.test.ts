@@ -6,7 +6,7 @@ import { AnalysisError } from "./analysisEngine";
 const DATASET: Dataset = {
   source: "uploaded",
   label: "test.csv",
-  products: [{ id: "p1", name: "Test Widget", category: "Electronics" }],
+  products: [{ id: "p1", name: "Test Widget", category: "Electronics", topCategory: "Electronics" }],
   reviews: [
     { id: "r1", productId: "p1", date: "2026-02-01", rating: 5, text: "Very comfortable to wear." },
     { id: "r2", productId: "p1", date: "2026-02-02", rating: 4, text: "So comfortable for long days." },

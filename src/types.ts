@@ -4,7 +4,22 @@
 export interface Product {
   id: string;
   name: string;
+  /**
+   * What the product IS — the innermost category segment, for display.
+   * Amazon's `Home&Kitchen|HomeDecor|Lighting` leafs to `Lighting`; a flat
+   * sample value such as `Electronics` is its own leaf.
+   */
   category: string;
+  /**
+   * What the product BELONGS TO — the outermost category segment, and the
+   * grouping key for category-scope analysis. Flat data is already top level,
+   * so `topCategory === category` there.
+   *
+   * Required, not optional: a product always belongs somewhere, and an optional
+   * field populated for one source only would let category scope silently skip
+   * rows it could not group.
+   */
+  topCategory: string;
 }
 
 export interface Review {

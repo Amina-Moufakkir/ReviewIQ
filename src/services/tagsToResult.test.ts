@@ -4,7 +4,7 @@ import { validateTags, type RawTag } from "./claudeTags";
 import { tagsToResult } from "./tagsToResult";
 import { PRODUCT_RECORD } from "../lib/datasetInfo";
 
-const PRODUCT: Product = { id: "p1", name: "Test Widget", category: "Electronics" };
+const PRODUCT: Product = { id: "p1", name: "Test Widget", category: "Electronics", topCategory: "Electronics" };
 const INPUT: AnalysisInput = { productId: "p1", from: "2026-01-01", to: "2026-12-31" };
 
 function review(id: string, text: string, author: string): Review {
