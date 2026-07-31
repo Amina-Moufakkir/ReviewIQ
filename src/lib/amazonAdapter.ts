@@ -246,7 +246,10 @@ function toCanonicalRow(record: AmazonRecord): string[] {
     record.reviewId,
     record.productId,
     record.productName,
-    record.category,
+    // The FULL hierarchy, not the leaf. The loader needs both ends of the path:
+    // the leaf to display and the top level to group by. Sending the leaf here
+    // discarded the top level, which is what category scope groups on.
+    record.raw.category,
     String(record.rating),
     record.text,
   ];

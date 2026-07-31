@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AnalysisResult, Finding } from "../types";
+import type { AnalysisResult, AnalysisScope, Finding } from "../types";
 import { dateRangeSuffix, formatCount, scopeLabel, themePhrase, type DatasetUnit } from "../lib/datasetInfo";
 import { generateMarkdownReport } from "../lib/generateMarkdownReport";
 import { copyReportToClipboard } from "../lib/copyReport";
@@ -14,6 +14,11 @@ interface ResultsViewProps {
   /** Whether the analyzed dataset carried per-review dates. */
   hasDates: boolean;
   /**
+   * What the run was about. The result names its subject but not its kind, and
+   * a category name reads exactly like a product name in a heading.
+   */
+  scopeKind: AnalysisScope["kind"];
+  /**
    * Where the displayed sentiment came from. "text" = the Claude engine read the
    * review bodies; "rating" = the heuristic engine inferred it from each row's
    * own star rating. It changes only what the header CLAIMS about the average
@@ -25,7 +30,13 @@ interface ResultsViewProps {
 type Toast = { message: string; tone: "success" | "error" };
 
 /** The full sentiment brief: findings lede, ledger, themes, recommendations. */
-export function ResultsView({ result, unit, hasDates, sentimentSource }: ResultsViewProps) {
+export function ResultsView({
+  result,
+  unit,
+  hasDates,
+  scopeKind,
+  sentimentSource,
+}: ResultsViewProps) {
   // Combined at-a-glance theme list, most-mentioned first.
   const themes: Finding[] = [...result.praise, ...result.faults].sort(
     (a, b) => b.mentions - a.mentions || a.label.localeCompare(b.label),
@@ -43,7 +54,9 @@ export function ResultsView({ result, unit, hasDates, sentimentSource }: Results
 
   async function handleCopyReport() {
     try {
-      await copyReportToClipboard(generateMarkdownReport(result, undefined, unit, sentimentSource));
+      await copyReportToClipboard(
+        generateMarkdownReport(result, undefined, unit, sentimentSource, scopeKind),
+      );
       setToast({ message: "Report copied", tone: "success" });
     } catch {
       setToast({ message: "Could not copy report", tone: "error" });
@@ -92,11 +105,21 @@ export function ResultsView({ result, unit, hasDates, sentimentSource }: Results
         <h2 className="mt-2 font-display text-3xl font-medium leading-tight text-ink">
           {result.productName}
         </h2>
+        {/* A category name and a product name look alike in a heading, so the
+            scope is stated rather than inferred. Product scope says nothing
+            extra: it is the default, and the title is already a product name. */}
         <p className="mt-3 font-mono text-xs text-ink-soft">
+          {scopeKind === "category" ? <>Category · </> : null}
           {formatCount(result.reviewCount, unit)} · {result.averageRating.toFixed(1)}★{" "}
           {unit.isProductLevel ? "averaged product rating" : "avg"}
           {dateRangeSuffix(result.from, result.to, hasDates)}
         </p>
+        {scopeKind === "category" ? (
+          <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-ink-soft">
+            Every {unit.one} across every product in this category is analyzed together, so counts
+            and percentages are shares of the category, not of any one product.
+          </p>
+        ) : null}
         <p className="mt-4 max-w-2xl font-display text-lg leading-relaxed text-ink">
           {result.summary}
         </p>

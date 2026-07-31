@@ -23,7 +23,9 @@ Build the smallest possible MVP that proves AI can summarize customer reviews in
 
 User:
 
-1. Selects product
+1. Selects a scope — one product, or one whole category. Categories group on the
+   top-level category value, the same rule for a pipe hierarchy and a flat one.
+   Scope widens which rows are analyzed; it never changes what a row is
 2. Selects a date range — only when the data carries per-review dates; the
    control is hidden for undated data rather than shown empty
 3. Clicks Analyze
@@ -41,6 +43,8 @@ one and a Claude-powered semantic one — and the UI states which one ran, so
 - User accounts
 - Dashboards
 - Charts
+- Cross-category ranking — comparing categories to say which has the most
+  complaints. Category-level *theme* analysis is built; ranking is not.
 - Notifications
 - File export — downloads, DOCX, CSV. (Copying the report as Markdown to the
   clipboard is IN scope and already shipped; see SPEC.md "Out of Scope".)

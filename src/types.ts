@@ -4,7 +4,22 @@
 export interface Product {
   id: string;
   name: string;
+  /**
+   * What the product IS — the innermost category segment, for display.
+   * Amazon's `Home&Kitchen|HomeDecor|Lighting` leafs to `Lighting`; a flat
+   * sample value such as `Electronics` is its own leaf.
+   */
   category: string;
+  /**
+   * What the product BELONGS TO — the outermost category segment, and the
+   * grouping key for category-scope analysis. Flat data is already top level,
+   * so `topCategory === category` there.
+   *
+   * Required, not optional: a product always belongs somewhere, and an optional
+   * field populated for one source only would let category scope silently skip
+   * rows it could not group.
+   */
+  topCategory: string;
 }
 
 export interface Review {
@@ -78,9 +93,20 @@ export interface Finding {
   quoteAuthor: string;
 }
 
+/**
+ * What the analyst chose to analyze: one product, or one whole category.
+ *
+ * A discriminated union rather than an optional `category` field, so "category
+ * scope carrying a product id" cannot be represented at all. Scope widens WHICH
+ * rows are analyzed; it never changes WHAT a row is — that stays `DatasetUnit`.
+ */
+export type AnalysisScope =
+  | { kind: "product"; productId: string }
+  | { kind: "category"; category: string };
+
 /** The inputs an analyst chooses before running an analysis. */
 export interface AnalysisInput {
-  productId: string;
+  scope: AnalysisScope;
   /** Inclusive ISO start date. */
   from: string;
   /** Inclusive ISO end date. */
@@ -114,6 +140,13 @@ export interface PromotionInsight {
 
 /** Structured output of an analysis run — all derived from matched reviews. */
 export interface AnalysisResult {
+  /**
+   * What the run was about. Under category scope this holds the CATEGORY name,
+   * not a product name — the field predates scopes and was deliberately left
+   * unchanged rather than widening this contract. Callers that need to tell the
+   * two apart are passed the scope separately (see `ResultsView`), and an
+   * optional `scopeLabel` here is the clean fix if the contract is ever opened.
+   */
   productName: string;
   from: string;
   to: string;

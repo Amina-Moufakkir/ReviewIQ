@@ -1,12 +1,26 @@
 import type { FormEvent } from "react";
-import type { Product, ReviewStats } from "../types";
-import { dateRangeSuffix, formatCount, type DatasetUnit } from "../lib/datasetInfo";
+import type { AnalysisScope, Product, ReviewStats } from "../types";
+import {
+  dateRangeSuffix,
+  formatCount,
+  type CategorySummary,
+  type DatasetUnit,
+} from "../lib/datasetInfo";
 import { ProductSelect } from "./ProductSelect";
+import { CategorySelect } from "./CategorySelect";
+import { ScopeControl } from "./ScopeControl";
 import { DateRangePicker } from "./DateRangePicker";
 
 interface AnalyzeFormProps {
   products: Product[];
   productId: string;
+  /** What the run is about — one product, or one whole category. */
+  scopeKind: AnalysisScope["kind"];
+  /** Top-level categories in the loaded dataset, alphabetical, with sizes. */
+  categories: CategorySummary[];
+  category: string;
+  onScopeKindChange: (kind: AnalysisScope["kind"]) => void;
+  onCategoryChange: (category: string) => void;
   from: string;
   to: string;
   /** Row count and available date span for the selected product. */
@@ -30,6 +44,11 @@ interface AnalyzeFormProps {
 export function AnalyzeForm({
   products,
   productId,
+  scopeKind,
+  categories,
+  category,
+  onScopeKindChange,
+  onCategoryChange,
   from,
   to,
   productStats,
@@ -43,9 +62,12 @@ export function AnalyzeForm({
 }: AnalyzeFormProps) {
   const rangeError =
     hasDates && from && to && from > to ? "Start date must be on or before the end date." : "";
+  const isCategory = scopeKind === "category";
+  const subjectChosen = isCategory ? Boolean(category) : Boolean(productId);
   const canSubmit = Boolean(
-    productId && (!hasDates || (from && to)) && !rangeError && !isLoading,
+    subjectChosen && (!hasDates || (from && to)) && !rangeError && !isLoading,
   );
+  const selectedCategory = categories.find((c) => c.category === category);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -58,19 +80,47 @@ export function AnalyzeForm({
         Query
       </p>
       <div className="flex flex-col gap-5">
+        <ScopeControl
+          kind={scopeKind}
+          onChange={onScopeKindChange}
+          disabled={isLoading}
+          categoryAvailable={categories.length > 0}
+        />
+
         <div className="flex flex-col gap-1.5">
-          <ProductSelect
-            products={products}
-            value={productId}
-            onChange={onProductChange}
-            disabled={isLoading}
-          />
-          {productStats.count > 0 ? (
-            <p className="font-mono text-[11px] text-ink-soft">
-              {formatCount(productStats.count, unit)}
-              {dateRangeSuffix(productStats.from, productStats.to, hasDates)}
-            </p>
-          ) : null}
+          {isCategory ? (
+            <>
+              <CategorySelect
+                categories={categories}
+                value={category}
+                unit={unit}
+                onChange={onCategoryChange}
+                disabled={isLoading}
+              />
+              {selectedCategory ? (
+                <p className="font-mono text-[11px] text-ink-soft">
+                  {formatCount(selectedCategory.rowCount, unit)} across{" "}
+                  {selectedCategory.productCount}{" "}
+                  {selectedCategory.productCount === 1 ? "product" : "products"}
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <ProductSelect
+                products={products}
+                value={productId}
+                onChange={onProductChange}
+                disabled={isLoading}
+              />
+              {productStats.count > 0 ? (
+                <p className="font-mono text-[11px] text-ink-soft">
+                  {formatCount(productStats.count, unit)}
+                  {dateRangeSuffix(productStats.from, productStats.to, hasDates)}
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
 
         {/* No date window for undated data — there is nothing to filter on.
@@ -87,7 +137,7 @@ export function AnalyzeForm({
         ) : products.length > 0 ? (
           <p className="font-mono text-[11px] leading-relaxed text-ink-soft">
             This dataset carries no review dates, so there is no window to select. Every{" "}
-            {unit.one} for the chosen product is analyzed.
+            {unit.one} for the chosen {isCategory ? "category" : "product"} is analyzed.
           </p>
         ) : null}
 

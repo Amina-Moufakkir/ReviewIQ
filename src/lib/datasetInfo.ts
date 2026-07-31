@@ -43,6 +43,43 @@ export function unitFor(dataset: Dataset): DatasetUnit {
   return dataset.source === "amazon" ? PRODUCT_RECORD : REVIEW;
 }
 
+/** One selectable category, with what it would put in front of the engine. */
+export interface CategorySummary {
+  category: string;
+  productCount: number;
+  /** Rows the engine would read — reviews or product records, per the unit. */
+  rowCount: number;
+}
+
+/**
+ * The top-level categories present in a dataset, alphabetical, with the size of
+ * each. Size is shown because it is the analyst's only warning that a category
+ * may exceed the Claude engine's per-request cap.
+ *
+ * Products with no category key are omitted rather than grouped under a blank
+ * entry: an unlabelled product cannot be analyzed as part of anything.
+ */
+export function categoriesIn(dataset: Dataset): CategorySummary[] {
+  const totals = new Map<string, { productCount: number; rowCount: number }>();
+  const keyOf = new Map(dataset.products.map((p) => [p.id, p.topCategory]));
+
+  for (const product of dataset.products) {
+    if (!product.topCategory) continue;
+    const entry = totals.get(product.topCategory) ?? { productCount: 0, rowCount: 0 };
+    entry.productCount += 1;
+    totals.set(product.topCategory, entry);
+  }
+  for (const review of dataset.reviews) {
+    const key = keyOf.get(review.productId);
+    const entry = key ? totals.get(key) : undefined;
+    if (entry) entry.rowCount += 1;
+  }
+
+  return [...totals.entries()]
+    .map(([category, entry]) => ({ category, ...entry }))
+    .sort((a, b) => a.category.localeCompare(b.category));
+}
+
 /**
  * Whether the active Amazon data is the synthetic stand-in rather than the real
  * dataset. The UI says so wherever it matters — a visitor must never mistake

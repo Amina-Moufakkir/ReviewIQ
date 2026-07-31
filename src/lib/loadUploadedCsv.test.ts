@@ -166,13 +166,13 @@ describe("upload routing — a dataset switch clears stale analysis", () => {
     const amazonDataset = loadUploadedCsv(RAW_AMAZON_CSV, "amazon.csv").dataset;
 
     const firstProduct = (d: typeof reviewDataset): AnalysisInput => ({
-      productId: d.products[0]!.id,
+      scope: { kind: "product", productId: d.products[0]!.id },
       from: "",
       to: "",
     });
     const before = firstProduct(reviewDataset);
     const after = firstProduct(amazonDataset);
-    expect(before.productId).not.toBe(after.productId);
+    expect(before.scope).not.toEqual(after.scope);
 
     const analyzed: AnalysisState = {
       status: "success",

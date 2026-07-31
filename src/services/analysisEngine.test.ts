@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { Product, Review } from "../types";
+import type { AnalysisInput, Product, Review } from "../types";
 import {
   analyze,
   filterReviews,
@@ -12,8 +12,8 @@ import { PRODUCT_RECORD, REVIEW } from "../lib/datasetInfo";
 
 const PRODUCT_ID = "widget-01";
 const PRODUCTS: Product[] = [
-  { id: PRODUCT_ID, name: "Test Widget", category: "Electronics" },
-  { id: "other-01", name: "Other Widget", category: "Electronics" },
+  { id: PRODUCT_ID, name: "Test Widget", category: "Electronics", topCategory: "Electronics" },
+  { id: "other-01", name: "Other Widget", category: "Electronics", topCategory: "Electronics" },
 ];
 
 // Helper to build reviews. Text is written so keywords land on known library
@@ -25,7 +25,11 @@ function review(
   return { productId: PRODUCT_ID, ...partial };
 }
 
-const FULL = { productId: PRODUCT_ID, from: "2026-01-01", to: "2026-12-31" };
+const FULL: AnalysisInput = {
+  scope: { kind: "product", productId: PRODUCT_ID },
+  from: "2026-01-01",
+  to: "2026-12-31",
+};
 
 describe("filterReviews", () => {
   it("keeps only the product's reviews inside the inclusive range, oldest first", () => {
@@ -48,7 +52,7 @@ describe("analyze — filtering", () => {
       review({ id: "late", date: "2026-05-01", rating: 5, text: "sound" }),
       { ...review({ id: "other", date: "2026-02-10", rating: 1, text: "sound" }), productId: "other-01" },
     ];
-    const result = analyze({ productId: PRODUCT_ID, from: "2026-02-01", to: "2026-02-28" }, reviews, PRODUCTS);
+    const result = analyze({ scope: { kind: "product", productId: PRODUCT_ID }, from: "2026-02-01", to: "2026-02-28" }, reviews, PRODUCTS);
     expect(result.reviewCount).toBe(2);
     expect(result.averageRating).toBe(4.5);
   });
@@ -56,17 +60,17 @@ describe("analyze — filtering", () => {
 
 describe("analyze — invalid input", () => {
   it("throws AnalysisError when from is after to", () => {
-    expect(() => analyze({ productId: PRODUCT_ID, from: "2026-05-01", to: "2026-01-01" }, [], PRODUCTS)).toThrow(AnalysisError);
+    expect(() => analyze({ scope: { kind: "product", productId: PRODUCT_ID }, from: "2026-05-01", to: "2026-01-01" }, [], PRODUCTS)).toThrow(AnalysisError);
   });
   it("throws AnalysisError for an unknown product", () => {
-    expect(() => analyze({ productId: "nope", from: "2026-01-01", to: "2026-12-31" }, [], PRODUCTS)).toThrow(AnalysisError);
+    expect(() => analyze({ scope: { kind: "product", productId: "nope" }, from: "2026-01-01", to: "2026-12-31" }, [], PRODUCTS)).toThrow(AnalysisError);
   });
 });
 
 describe("analyze — empty result", () => {
   it("returns a zero-review result with no findings or recommendations", () => {
     const reviews: Review[] = [review({ id: "a", date: "2026-01-10", rating: 5, text: "Great sound." })];
-    const result = analyze({ productId: PRODUCT_ID, from: "2026-06-01", to: "2026-06-30" }, reviews, PRODUCTS);
+    const result = analyze({ scope: { kind: "product", productId: PRODUCT_ID }, from: "2026-06-01", to: "2026-06-30" }, reviews, PRODUCTS);
     expect(result.reviewCount).toBe(0);
     expect(result.averageRating).toBe(0);
     expect(result.praise).toHaveLength(0);
@@ -181,7 +185,7 @@ describe("analyze — representative quotes", () => {
       review({ id: "in2", date: "2026-02-02", rating: 5, text: "Lovely sound." }),
       review({ id: "out", date: "2026-09-01", rating: 5, text: "This sound is uniquely-unquotable-outside." }),
     ];
-    const result = analyze({ productId: PRODUCT_ID, from: "2026-01-01", to: "2026-03-01" }, reviews, PRODUCTS);
+    const result = analyze({ scope: { kind: "product", productId: PRODUCT_ID }, from: "2026-01-01", to: "2026-03-01" }, reviews, PRODUCTS);
     const quotes = [...result.praise, ...result.faults].map((f) => f.quote);
     expect(quotes.some((q) => q.includes("unquotable-outside"))).toBe(false);
   });
@@ -477,7 +481,7 @@ describe("analyze — summary wording for undated, single-record data", () => {
   const oneThemed: Review[] = [
     review({ id: "r1", date: "", rating: 5, text: "The sound quality is superb and the bass is rich." }),
   ];
-  const UNDATED = { productId: PRODUCT_ID, from: "", to: "" };
+  const UNDATED: AnalysisInput = { scope: { kind: "product", productId: PRODUCT_ID }, from: "", to: "" };
 
   it("drops the (1 of 1) tally, the window, and the word recurring", () => {
     const summary = analyze(UNDATED, oneThemed, PRODUCTS, PRODUCT_RECORD).summary;

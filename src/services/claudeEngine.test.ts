@@ -1,19 +1,23 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import type { Dataset } from "../types";
+import type { AnalysisInput, Dataset } from "../types";
 import { analyzeWithClaude } from "./claudeEngine";
 import { AnalysisError } from "./analysisEngine";
 
 const DATASET: Dataset = {
   source: "uploaded",
   label: "test.csv",
-  products: [{ id: "p1", name: "Test Widget", category: "Electronics" }],
+  products: [{ id: "p1", name: "Test Widget", category: "Electronics", topCategory: "Electronics" }],
   reviews: [
     { id: "r1", productId: "p1", date: "2026-02-01", rating: 5, text: "Very comfortable to wear." },
     { id: "r2", productId: "p1", date: "2026-02-02", rating: 4, text: "So comfortable for long days." },
     { id: "r3", productId: "p1", date: "2026-02-03", rating: 2, text: "Connection keeps dropping." },
   ],
 };
-const INPUT = { productId: "p1", from: "2026-01-01", to: "2026-12-31" };
+const INPUT: AnalysisInput = {
+  scope: { kind: "product", productId: "p1" },
+  from: "2026-01-01",
+  to: "2026-12-31",
+};
 
 function mockFetch(impl: (url: string, init: RequestInit) => Response | Promise<Response>) {
   const fn = vi.fn(impl);
@@ -61,7 +65,7 @@ describe("analyzeWithClaude — success", () => {
   it("does not call the network when the window has no matching reviews", async () => {
     const fetchFn = mockFetch(() => jsonResponse({ tags: [] }));
     const result = await analyzeWithClaude(
-      { productId: "p1", from: "2020-01-01", to: "2020-12-31" },
+      { scope: { kind: "product", productId: "p1" }, from: "2020-01-01", to: "2020-12-31" },
       DATASET,
     );
     expect(fetchFn).not.toHaveBeenCalled();

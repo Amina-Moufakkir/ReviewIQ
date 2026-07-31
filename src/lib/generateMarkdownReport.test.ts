@@ -242,6 +242,24 @@ describe("markdown report — wording follows the dataset unit", () => {
     expect(perReview).not.toContain("a limit of the engine");
   });
 
+  // A copied report loses the query panel, so "Electronics" as a title would be
+  // indistinguishable from a product of that name.
+  it("names the scope, and says a category aggregates across its products", () => {
+    const asCategory = generateMarkdownReport(
+      noFindings,
+      GENERATED_ON,
+      PRODUCT_RECORD,
+      "text",
+      "category",
+    );
+    expect(asCategory).toContain("**Scope:** Category");
+    expect(asCategory).toContain("shares of the category, not of any one product");
+
+    const asProduct = generateMarkdownReport(noFindings, GENERATED_ON, PRODUCT_RECORD, "text");
+    expect(asProduct).toContain("**Scope:** Product");
+    expect(asProduct).not.toContain("shares of the category");
+  });
+
   // A product record's star value is an average over thousands of customers, so
   // the report names it as such rather than calling it an average of the rows
   // it analyzed. Per-review data keeps the plain label.

@@ -40,7 +40,9 @@ The core MVP is complete. An analyst can:
 - Use the **real Amazon product dataset** (the default), the built-in sample,
   load the bundled 204-review sample, or **upload a CSV** — either a ReviewIQ
   review CSV or a raw Amazon product export, recognized by its header
-- Select a product
+- Analyze **one product, or one whole category** — categories are grouped on the
+  top-level category value, so an analyst can ask a question about electronics
+  rather than about 490 products one at a time
 - Select a date range (for datasets that carry review dates)
 - Run the analysis
 - View a structured brief: overall summary, what customers praise, what they
@@ -78,6 +80,52 @@ shown at all, and how much a percentage is really claiming. `unitFor()` in
 `src/lib/datasetInfo.ts` is the single place that decision is made; everything
 downstream reads it. See [What one row actually is](#what-one-row-actually-is)
 for what this costs analytically.
+
+## Product or category scope
+
+An analyst's question is often not about one product. *"What are customers
+complaining about most in electronics this month?"* is a **category** question,
+and answering it by opening 490 products one at a time is exactly the manual
+reading this tool exists to remove.
+
+So a run is scoped to **either one product or one whole category**. Category
+scope is additive — product analysis is unchanged, and both go through the same
+`analyzeReviews()` contract and return the same `AnalysisResult`.
+
+**The grouping key is the top-level category.** Amazon ships a pipe hierarchy
+(`Home&Kitchen|HomeDecor|Lighting`); sample and uploaded CSVs ship a flat value
+(`Electronics`). A flat value is a hierarchy of length one, so one rule serves
+both: the key is the outermost segment (`src/lib/categoryKey.ts`), settled once
+in the loader and stored as `Product.topCategory`.
+
+Grouping on the *leaf* would be useless — the real dataset has **207 leaves**
+like `FanHeaters` and `HDMICables`, against **9 top-level categories**. Most
+leaves hold a single product.
+
+**Counts follow the unit, not the scope.** Widening the selection changes which
+rows are read, never what a row is:
+
+| Data | A category is | The brief counts |
+| --- | --- | --- |
+| Review data | many products × many reviews | reviews — "5 of 11 selected reviews" |
+| Amazon data | many products, each one aggregated record | product records — "237 of 526" |
+
+The per-unit evidence threshold still applies, the date window is still shown
+only for data that carries dates, and the findings header states the scope so a
+category name is never mistaken for a product name.
+
+**Under the Claude engine, large categories are refused, not truncated.** The
+`/api/analyze` endpoint caps a request at 100 rows. A single product is
+comfortably under it; a category often is not — three of the nine Amazon
+categories hold 447–526 records, covering 1,426 of the 1,464 rows. The engine
+checks the count before sending and returns a controlled message naming the
+subject, the real count and the cap, offering only remedies that exist for that
+query. Nothing is silently truncated: a partial answer would look like a
+complete one.
+
+The heuristic engine has no such cap, so category scope works there over any
+size — which is what the deployed demo runs. See
+[Which engine for which data](#which-engine-for-which-data).
 
 ## CSV upload
 
@@ -327,9 +375,11 @@ proposes; code disposes.
 
 ```mermaid
 flowchart TD
-    A["filterReviews()<br/>product + date window"] --> B{"rows matched?"}
+    A["selectForScope()<br/>one product OR one category<br/>+ date window"] --> B{"rows matched?"}
     B -- none --> Z["zeroResult()<br/>no network call, no cost"]
-    B -- "1..n" --> REQ["POST /api/analyze<br/>id + text only — the rating is NOT sent"]
+    B -- "1..n" --> CAP{"more than 100 rows?"}
+    CAP -- yes --> E0["AnalysisError — refused before sending<br/>names the subject, count and cap<br/>NEVER truncated"]
+    CAP -- no --> REQ["POST /api/analyze<br/>id + text only — the rating is NOT sent"]
 
     REQ --> V["parseReviewRequest + size caps<br/>100 reviews · 250 KB body · 200 KB text"]
     V -- rejected --> E1["400 / 413"]
@@ -353,7 +403,7 @@ flowchart TD
     classDef err fill:#fecaca,stroke:#b91c1c,color:#111827
     class M nd
     class G1,G2 gate
-    class E1,E2,E3 err
+    class E0,E1,E2,E3 err
 ```
 
 Three properties are worth reading off the diagram:
@@ -370,6 +420,10 @@ Three properties are worth reading off the diagram:
   The client trusts the server, so *any* rejection there means a version
   mismatch or a tampered response, and the whole request fails rather than
   rendering a partial report.
+- **Two branches exit before any request is sent.** No matching rows returns the
+  empty result; more rows than the cap is refused outright. Both cost nothing,
+  and neither ever produces a partial answer — see
+  [Product or category scope](#product-or-category-scope).
 
 ### Why the second engine exists
 

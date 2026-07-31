@@ -1,6 +1,7 @@
 import type { Dataset, Product, Review } from "../types";
 import { parseCsv, readColumns, type CsvColumns } from "./csv";
 import { isValidIsoDate } from "./date";
+import { leafCategory, topLevelCategory } from "./categoryKey";
 
 /** Thrown when a CSV cannot be turned into a usable dataset. */
 export class CsvError extends Error {
@@ -129,10 +130,15 @@ export function buildDataset(
 
     reviews.push(toReview(fields, rows[r]!, columns));
     if (!productMap.has(fields.productId)) {
+      // Both readings of the category cell are settled here, once. `category`
+      // is what the product is (the leaf, shown in the picker); `topCategory`
+      // is what it belongs to (the grouping key for category scope). Flat data
+      // makes the two identical, so no source needs a special case.
       productMap.set(fields.productId, {
         id: fields.productId,
         name: fields.productName || fields.productId,
-        category: fields.category,
+        category: leafCategory(fields.category),
+        topCategory: topLevelCategory(fields.category),
       });
     }
   }
@@ -198,7 +204,9 @@ function toReview(fields: RowFields, row: string[], columns: CsvColumns): Review
     date: fields.date,
     rating: fields.rating,
     text: fields.text,
-    category: fields.category,
+    // The leaf, matching Product.category. Grouping reads Product.topCategory,
+    // never this — a review's category is optional in the wider model.
+    category: leafCategory(fields.category),
     title: optional("review_title"),
     country: optional("country"),
     promotion: optional("promotion"),

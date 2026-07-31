@@ -76,6 +76,86 @@ export function filterReviews(
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/**
+ * What one analysis run covers: the subject it is about, and the rows it reads.
+ *
+ * BOTH engines resolve scope through `selectForScope` so they can never disagree
+ * about which rows a query selects. The two-engine comparison is only meaningful
+ * because they see identical input; duplicating this logic would quietly break
+ * that the first time one copy changed.
+ */
+export interface ScopeSelection {
+  /**
+   * What the result is about. For product scope this is the real `Product`. For
+   * category scope it is synthesized from the category name, so the existing
+   * `AnalysisResult` contract and `buildSummary` need no change — the category
+   * simply takes the subject's place.
+   */
+  subject: Product;
+  /** The matched rows, oldest first, exactly as the engines consume them. */
+  rows: Review[];
+}
+
+/**
+ * Resolve a query to its subject and its rows.
+ *
+ * Category scope selects every accepted row belonging to any product whose
+ * `topCategory` matches — across all products in that category — and then
+ * applies the same date window as product scope. For undated data the window is
+ * `"" .. ""`, which matches every undated row, so the behaviour is unchanged.
+ *
+ * The unit is deliberately absent here: whether a row is a review or a product
+ * record is a property of the dataset, not of the scope, and widening the
+ * selection must not change it.
+ */
+export function selectForScope(
+  input: AnalysisInput,
+  reviews: Review[],
+  products: Product[],
+): ScopeSelection {
+  const { scope, from, to } = input;
+
+  if (scope.kind === "product") {
+    const product = products.find((p) => p.id === scope.productId);
+    if (!product) throw new AnalysisError(`Unknown product: ${scope.productId}`);
+    assertRange(from, to);
+    return { subject: product, rows: filterReviews(reviews, scope.productId, from, to) };
+  }
+
+  const inCategory = products.filter((p) => p.topCategory === scope.category);
+  if (inCategory.length === 0) throw new AnalysisError(`Unknown category: ${scope.category}`);
+  assertRange(from, to);
+
+  const ids = new Set(inCategory.map((p) => p.id));
+  return {
+    // DELIBERATE, not a bug to tidy up: at category scope every field carries
+    // the category label. `name` flows into `AnalysisResult.productName`, so
+    // that field holds "Electronics" rather than a product name — a knowing
+    // trade for leaving the AnalysisResult contract untouched. Nothing
+    // user-facing is ambiguous: the header and the copied report both state the
+    // scope. The clean fix, if that contract is ever opened, is an optional
+    // `scopeLabel` on AnalysisResult — not a rename here.
+    //
+    // `category`/`topCategory` are the category itself because a category
+    // belongs to nothing above it.
+    subject: {
+      id: scope.category,
+      name: scope.category,
+      category: scope.category,
+      topCategory: scope.category,
+    },
+    rows: reviews
+      .filter((r) => ids.has(r.productId) && r.date >= from && r.date <= to)
+      .sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
+function assertRange(from: string, to: string): void {
+  if (from > to) {
+    throw new AnalysisError("The start date must be on or before the end date.");
+  }
+}
+
 /** Sample-data context for a product (count + available date span). */
 export function reviewStatsFor(productId: string, reviews: Review[]): ReviewStats {
   const dates = reviews
@@ -89,24 +169,15 @@ export function reviewStatsFor(productId: string, reviews: Review[]): ReviewStat
   };
 }
 
-/** Run the analysis for a product + date range against a set of reviews. */
+/** Run the analysis for the chosen scope + date range against a set of reviews. */
 export function analyze(
   input: AnalysisInput,
   reviews: Review[],
   products: Product[],
   unit: DatasetUnit = REVIEW,
 ): AnalysisResult {
-  const { productId, from, to } = input;
-
-  const product = products.find((p) => p.id === productId);
-  if (!product) {
-    throw new AnalysisError(`Unknown product: ${productId}`);
-  }
-  if (from > to) {
-    throw new AnalysisError("The start date must be on or before the end date.");
-  }
-
-  const matched = filterReviews(reviews, productId, from, to);
+  const { from, to } = input;
+  const { subject: product, rows: matched } = selectForScope(input, reviews, products);
   const reviewCount = matched.length;
   const averageRating =
     reviewCount === 0 ? 0 : round1(matched.reduce((sum, r) => sum + r.rating, 0) / reviewCount);

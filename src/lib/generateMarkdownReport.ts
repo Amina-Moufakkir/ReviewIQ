@@ -75,12 +75,17 @@ function findingsSection(
  * Recommendations section can distinguish "nothing was found" from "this engine
  * cannot look". It defaults to "text", which claims the least: it never blames
  * an absent finding on an engine limitation the caller did not declare.
+ *
+ * `scopeKind` names what the report is about. A copied report loses the query
+ * panel, so a category title would otherwise be indistinguishable from a
+ * product title. Defaults to "product", the long-standing behaviour.
  */
 export function generateMarkdownReport(
   result: AnalysisResult,
   generatedOn?: string,
   unit: DatasetUnit = REVIEW_UNIT,
   sentimentSource: "text" | "rating" = "text",
+  scopeKind: "product" | "category" = "product",
 ): string {
   const generated = generatedOn ?? todayFormatted();
   const dated = Boolean(result.from && result.to);
@@ -88,11 +93,19 @@ export function generateMarkdownReport(
   const header = [
     `# ReviewIQ Report: ${result.productName}`,
     "",
+    `**Scope:** ${scopeKind === "category" ? "Category" : "Product"}  `,
     ...(dated ? [`**Analysis window:** ${formatDate(result.from)} – ${formatDate(result.to)}  `] : []),
     `**${capitalize(unit.many)} analyzed:** ${result.reviewCount}  `,
     // Product-level rows carry a product-AVERAGE rating over thousands of
     // customers, so "average rating" alone understates what the number is.
     `**${unit.isProductLevel ? "Averaged product rating" : "Average rating"}:** ${result.averageRating.toFixed(1)}/5`,
+    ...(scopeKind === "category"
+      ? [
+          "",
+          "> Every row across every product in this category was analyzed together, so counts",
+          "> and percentages are shares of the category, not of any one product.",
+        ]
+      : []),
     ...(unit.isProductLevel
       ? [
           "",

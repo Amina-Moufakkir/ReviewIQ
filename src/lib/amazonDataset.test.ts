@@ -55,7 +55,7 @@ function assertAdapterInvariants(name: string, result: AmazonAdapterResult) {
     // The boundary (analyzeReviews) is what decides the unit, so assert through
     // it: dropping unitFor() there is invisible to the engine's own tests.
     const product = dataset.products[0]!;
-    return analyzeReviews({ productId: product.id, from: "", to: "" }, dataset).then((result) => {
+    return analyzeReviews({ scope: { kind: "product", productId: product.id }, from: "", to: "" }, dataset).then((result) => {
       expect(result.summary).toMatch(/product records?/i);
       expect(result.summary).not.toMatch(/\breviews?\b/i);
     });
@@ -86,7 +86,7 @@ function assertAdapterInvariants(name: string, result: AmazonAdapterResult) {
   it(`${name}: runs the heuristic engine over the empty window for every product`, () => {
     for (const product of dataset.products) {
       const analysis = analyze(
-        { productId: product.id, from: "", to: "" },
+        { scope: { kind: "product", productId: product.id }, from: "", to: "" },
         dataset.reviews,
         dataset.products,
       );
@@ -223,6 +223,22 @@ describe("Amazon adapter — synthetic fixture specifics", () => {
     expect(rec.category).toBe("USBCables");
   });
 
+  // The grouping key must reach the Product, since that is what category scope
+  // reads — categoryPath lives on AmazonRecord, which callers discard.
+  it("puts the record's top-level category on the product it produces", () => {
+    const rec = mini.records[0]!;
+    const product = mini.dataset.products.find((p) => p.id === rec.productId)!;
+    expect(product.topCategory).toBe(rec.categoryPath[0]);
+    expect(product.category).toBe(rec.category);
+  });
+
+  it("groups many leaves under far fewer top-level categories", () => {
+    const leaves = new Set(mini.dataset.products.map((p) => p.category));
+    const tops = new Set(mini.dataset.products.map((p) => p.topCategory));
+    expect(tops.size).toBeLessThan(leaves.size);
+    expect([...tops].every(Boolean)).toBe(true);
+  });
+
   it("keeps commas and escaped quotes inside the text intact", () => {
     expect(mini.dataset.reviews[0]!.text).toContain("Charging is fast, and the braid feels solid.");
     const press = mini.dataset.reviews.find((r) => r.productId === "SYN0000005")!;
@@ -284,7 +300,7 @@ describe.skipIf(!hasRealFixture)("Amazon adapter — real generated fixture", ()
 describe("Amazon analysis — single-record products still produce findings", () => {
   function findingsFor(result: AmazonAdapterResult, productId: string) {
     return analyze(
-      { productId, from: "", to: "" },
+      { scope: { kind: "product", productId }, from: "", to: "" },
       result.dataset.reviews,
       result.dataset.products,
       unitFor(result.dataset),
