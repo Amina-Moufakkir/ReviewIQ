@@ -376,9 +376,9 @@ by the same loader as any uploaded CSV, and adapted by
 `src/lib/amazonAdapter.ts`.
 
 > **The real dataset is not committed to this repository — you supply it
-> locally.** Its license and redistribution terms have not been verified, so
-> nothing derived from it is published here. See
-> [Getting the dataset](#getting-the-dataset) below.
+> locally.** Nothing derived from it is redistributed here, on purpose. See
+> [Source, licence and attribution](#source-licence-and-attribution) for why,
+> and [Getting the dataset](#getting-the-dataset) for how to supply it.
 
 **The Amazon source resolves in this order:**
 
@@ -398,6 +398,71 @@ Everything the integration does stays visible on the demo data: the adapter
 runs, records are undated, the wording says *product records*, the long-title
 selector shortening applies, and the parsed/accepted/skipped accounting has real
 skips to show.
+
+### Source, licence and attribution
+
+The dataset is the **Amazon Sales Dataset** by KARKAVELRAJA J, published on
+Kaggle at
+<https://www.kaggle.com/datasets/karkavelrajaj/amazon-sales-dataset>, where it
+is tagged **CC BY-NC-SA 4.0**. Approximately 1,465 product listings; this
+repository's figures (1,465 parsed → 1,464 accepted → 1,350 products) come from
+that file.
+
+**Nothing derived from it is redistributed here** — not the raw file, not the
+generated fixture, not an excerpt. That is deliberate, and it is stricter than
+the tag alone would require.
+
+The reason is that a Kaggle licence tag is chosen by the **uploader**, and an
+uploader can only license rights they hold. The review text here was written by
+Amazon customers, and Amazon's terms restrict scraping and redistribution of
+site content, so the tag governs at most the uploader's compilation — it cannot
+grant rights over the underlying reviews. Rather than decide how far it reaches,
+this project treats redistribution as not permitted and never tests the
+question. ShareAlike never triggers, because SA applies to *distributing* an
+adaptation and no adaptation is distributed. The non-commercial term is likewise
+never exercised.
+
+Attribution is given anyway, because published **results** are derived from the
+data even though the data is not published: record counts, the rating
+distribution, and the worked example in
+[Why the second engine exists](#why-the-second-engine-exists).
+
+Independently of licensing, the raw file carries **real reviewer ids and names**
+— see [Getting the dataset](#getting-the-dataset) for the counts and for what
+the generator strips. That is a privacy constraint, not a licence one, and it
+would apply even under a permissive licence.
+
+*This is a description of the project's own policy, not legal advice.*
+
+### Why the deployed build ships synthetic data
+
+The synthetic dataset is a **design decision, not a fallback of last resort**.
+
+The constraint was identified first: the data cannot be redistributed and
+carries personal identifiers. The available responses were to drop the Amazon
+integration, to deploy a crippled version of it, or to build a stand-in that
+exercises the identical code path. The third was chosen, so
+`public/amazon-demo.csv` is invented from scratch **in the source's exact column
+shape** — which is why the deployed demo still runs the real adapter, still
+produces undated product records, still says *product records* rather than
+*reviews*, and still has genuine skips in its load accounting.
+
+The boundary is enforced mechanically rather than by convention, because a rule
+that depends on remembering it is not a rule:
+
+| Mechanism | What it stops |
+| --- | --- |
+| `.gitignore` | the raw file and the generated fixture entering the repository |
+| `.vercelignore` | either file reaching a deployment — `vercel deploy` uploads the working directory, not the git tree, so `.gitignore` alone would not have caught this |
+| `scripts/build-amazon-csv.mjs` | reviewer ids and names surviving into the generated fixture |
+
+The two are labelled differently wherever they appear. The demo dataset loads as
+"Amazon demo records (synthetic)" and the app states in place that the records
+are invented, so a visitor cannot mistake generated text for customer feedback.
+
+The cost is honest and worth stating: the deployed demo cannot demonstrate the
+finding that motivates the second engine, because that finding needs real
+reviews. The README carries it instead, with the numbers.
 
 ### What one row actually is
 
@@ -525,11 +590,13 @@ from `src/test/fixtures/` — that directory stays test-only.
 
 Two reasons nothing derived from the dataset is published here:
 
-1. **License.** The source is the public *Amazon Sales Dataset* (widely
-   mirrored, e.g. on Kaggle). Its redistribution terms have not been verified
-   for this repository, so it is not redistributed. Once the license explicitly
-   permits redistribution, the generated fixture can be committed with the
-   attribution its terms require — nothing else in the setup needs to change.
+1. **Licence.** The source is the *Amazon Sales Dataset* on Kaggle, tagged
+   CC BY-NC-SA 4.0 by its uploader. Redistribution is treated as not permitted
+   regardless of that tag, for the reasons in
+   [Source, licence and attribution](#source-licence-and-attribution). If the
+   position on redistribution ever changes, the generated fixture can be
+   committed with the attribution the terms require — nothing else in the setup
+   needs to change.
 2. **Personal data.** The raw file's `user_id` and `user_name` columns are
    comma-joined lists holding 11,503 identity tokens — **9,050 distinct
    reviewer ids** (and 7,698 distinct names). The generator drops them (along with unused
