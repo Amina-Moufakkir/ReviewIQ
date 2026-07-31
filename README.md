@@ -444,7 +444,7 @@ by the same loader as any uploaded CSV, and adapted by
 
 > **The real dataset is not committed to this repository — you supply it
 > locally.** Nothing derived from it is redistributed here, on purpose. See
-> [Source, licence and attribution](#source-licence-and-attribution) for why,
+> [Source, license and attribution](#source-license-and-attribution) for why,
 > and [Getting the dataset](#getting-the-dataset) for how to supply it.
 
 **The Amazon source resolves in this order:**
@@ -466,7 +466,7 @@ runs, records are undated, the wording says *product records*, the long-title
 selector shortening applies, and the parsed/accepted/skipped accounting has real
 skips to show.
 
-### Source, licence and attribution
+### Source, license and attribution
 
 The dataset is the **Amazon Sales Dataset** by KARKAVELRAJA J, published on
 Kaggle at
@@ -479,7 +479,7 @@ that file.
 generated fixture, not an excerpt. That is deliberate, and it is stricter than
 the tag alone would require.
 
-The reason is that a Kaggle licence tag is chosen by the **uploader**, and an
+The reason is that a Kaggle license tag is chosen by the **uploader**, and an
 uploader can only license rights they hold. The review text here was written by
 Amazon customers, and Amazon's terms restrict scraping and redistribution of
 site content, so the tag governs at most the uploader's compilation — it cannot
@@ -496,8 +496,8 @@ distribution, and the worked example in
 
 Independently of licensing, the raw file carries **real reviewer ids and names**
 — see [Getting the dataset](#getting-the-dataset) for the counts and for what
-the generator strips. That is a privacy constraint, not a licence one, and it
-would apply even under a permissive licence.
+the generator strips. That is a privacy constraint, not a license one, and it
+would apply even under a permissive license.
 
 *This is a description of the project's own policy, not legal advice.*
 
@@ -662,10 +662,10 @@ from `src/test/fixtures/` — that directory stays test-only.
 
 Two reasons nothing derived from the dataset is published here:
 
-1. **Licence.** The source is the *Amazon Sales Dataset* on Kaggle, tagged
+1. **License.** The source is the *Amazon Sales Dataset* on Kaggle, tagged
    CC BY-NC-SA 4.0 by its uploader. Redistribution is treated as not permitted
    regardless of that tag, for the reasons in
-   [Source, licence and attribution](#source-licence-and-attribution). If the
+   [Source, license and attribution](#source-license-and-attribution). If the
    position on redistribution ever changes, the generated fixture can be
    committed with the attribution the terms require — nothing else in the setup
    needs to change.
@@ -904,6 +904,6 @@ ReviewIQ's own source code is released under the **MIT License** — see
 It does **not** cover the Amazon Sales Dataset, which is a separate work under
 its own terms (CC BY-NC-SA 4.0 as tagged on Kaggle) and is deliberately **not
 redistributed** here — no raw file, generated fixture, or excerpt. See
-[Source, licence and attribution](#source-licence-and-attribution) for the
+[Source, license and attribution](#source-license-and-attribution) for the
 reasoning. The synthetic `amazon-demo.csv` and `sample-reviews.csv` are original
 to this project and fall under the MIT license above.
