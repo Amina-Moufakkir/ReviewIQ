@@ -396,10 +396,15 @@ set on the Amazon data is the benchmark still deferred below.)
 ### Security model
 
 The Claude call runs **server-side only**, in a Vercel serverless function at
-`api/analyze.ts`. The `ANTHROPIC_API_KEY` lives only in the server environment
-(a Vercel Environment Variable), is never bundled into the browser, and is never
-prefixed `VITE_`. The browser sends the filtered reviews to `/api/analyze` and
-receives back validated tags or a controlled error.
+`api/analyze.ts`. The `ANTHROPIC_API_KEY` is read only via `process.env` inside
+that function — it is never bundled into the browser and never prefixed `VITE_`.
+By decision, the key is set in **no Vercel environment**; it lives only in a
+local `.env.local` for `vercel dev`, so the deployed `/api/analyze` answers a
+controlled `500 server_misconfigured` rather than running. See
+[Secret configuration (local only)](#secret-configuration-local-only) and
+[Where this is verified, and where it is not](#which-engine-for-which-data) for
+why the live endpoint is intentionally keyless. The browser sends the filtered
+reviews to `/api/analyze` and receives back validated tags or a controlled error.
 
 ### Selecting an engine
 
@@ -409,6 +414,11 @@ Set `VITE_ANALYSIS_ENGINE` in the environment:
 | ----------- | --------- | ------------------------------------ |
 | `heuristic` | Engine 1  | Browser only (GitHub Pages demo)     |
 | `claude`    | Engine 2  | Vercel (`api/analyze.ts`) + browser  |
+
+> **Note:** the `claude` row describes where the engine runs *when enabled*. In
+> this project it is enabled **only in local `vercel dev`** — never on the live
+> Vercel deployment, which ships heuristic-only with no key. See
+> [How the two deployments coexist](#how-the-two-deployments-coexist).
 
 `VITE_ANALYSIS_ENGINE` carries only the engine name — it is **not** a secret and
 contains no key. When Claude mode is selected and the call fails, the app
@@ -874,3 +884,15 @@ CSV upload, and a deterministic heuristic engine, plus an optional
 Claude-powered semantic-tagging engine behind the same `analyzeReviews()`
 boundary (server-side key, controlled errors, identical UI and
 `AnalysisResult`). Engine chosen by `VITE_ANALYSIS_ENGINE`.
+
+## License
+
+ReviewIQ's own source code is released under the **MIT License** — see
+[`LICENSE`](LICENSE). This covers the code in this repository only.
+
+It does **not** cover the Amazon Sales Dataset, which is a separate work under
+its own terms (CC BY-NC-SA 4.0 as tagged on Kaggle) and is deliberately **not
+redistributed** here — no raw file, generated fixture, or excerpt. See
+[Source, licence and attribution](#source-licence-and-attribution) for the
+reasoning. The synthetic `amazon-demo.csv` and `sample-reviews.csv` are original
+to this project and fall under the MIT license above.
