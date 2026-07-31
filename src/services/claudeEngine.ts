@@ -1,8 +1,8 @@
 import type { AnalysisInput, AnalysisResult, Dataset } from "../types";
 import { AnalysisError, selectForScope } from "./analysisEngine";
-import { validateTags } from "./claudeTags";
+import { validateTags, MAX_REVIEWS_PER_REQUEST } from "./claudeTags";
 import { tagsToResult, zeroResult } from "./tagsToResult";
-import { unitFor } from "../lib/datasetInfo";
+import { formatCount, pluralize, unitFor, type DatasetUnit } from "../lib/datasetInfo";
 
 /**
  * Client-side Claude engine. It filters reviews, calls the same-origin server
@@ -25,9 +25,22 @@ export async function analyzeWithClaude(
     dataset.reviews,
     dataset.products,
   );
+  const unit = unitFor(dataset);
   // No reviews in the window: return the empty result without a network call —
   // this is the legitimate empty state, not a fallback.
-  if (matched.length === 0) return zeroResult(product, input, unitFor(dataset));
+  if (matched.length === 0) return zeroResult(product, input, unit);
+
+  // Over-limit is refused here, before the request is built, rather than left
+  // to the server's 413. Two reasons: the round trip is pointless, and the
+  // server can only say "at most 100 reviews can be analyzed at once", which
+  // names no way forward. The client knows the subject, the count, the noun and
+  // whether a date window even exists, so it can say what to do instead.
+  //
+  // This is a real limit on category scope, not a corner case: three of the
+  // nine top-level categories in the Amazon dataset hold 447-526 records each.
+  if (matched.length > MAX_REVIEWS_PER_REQUEST) {
+    throw new AnalysisError(overLimitMessage(product.name, matched.length, unit, input));
+  }
 
   // Text only: sentiment on this path is derived from the review body, so the
   // rating is not sent. See "Which engine for which data" in README.md.
@@ -99,7 +112,39 @@ async function messageForStatus(response: Response): Promise<string> {
   } catch {
     // fall through to a generic message
   }
-  if (response.status === 413) return "That request is too large. Narrow the date range and try again.";
+  // Deliberately says nothing about a date range: undated data has no window
+  // to narrow, and this fires only when the endpoint's own message was
+  // unreadable, so it cannot know what the caller selected.
+  if (response.status === 413) {
+    return "That selection is too large for the Claude engine. Analyze a smaller selection, or use the heuristic engine, which has no limit.";
+  }
   if (response.status === 504) return "The analysis timed out. Try a narrower date range.";
   return "The analysis service is unavailable right now. Please try again.";
+}
+
+/**
+ * Why a selection was refused, and what to do about it.
+ *
+ * Names the subject, the real count in the dataset's own noun, and the cap — an
+ * analyst who is told "at most 100" without being told they asked for 526
+ * cannot tell whether they were close. The remedies offered are only the ones
+ * that actually exist for this query: narrowing a window is useless advice on
+ * undated data, and "pick one product" means nothing under product scope.
+ */
+function overLimitMessage(
+  subject: string,
+  count: number,
+  unit: DatasetUnit,
+  input: AnalysisInput,
+): string {
+  const remedies: string[] = [];
+  if (input.scope.kind === "category") remedies.push("analyze a single product instead");
+  if (input.from && input.to) remedies.push("narrow the date range");
+  remedies.push("or switch to the heuristic engine, which has no limit");
+
+  return (
+    `${subject} has ${formatCount(count, unit)}. The Claude engine analyzes at most ` +
+    `${MAX_REVIEWS_PER_REQUEST} ${pluralize(MAX_REVIEWS_PER_REQUEST, unit)} at once. ` +
+    `You can ${remedies.join(", ")}.`
+  );
 }
