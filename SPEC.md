@@ -28,7 +28,12 @@ Primary:
 
 User selects:
 
-- Product
+- Scope — **one product, or one whole category**. Categories are grouped on the
+  top-level category value, so an Amazon pipe hierarchy
+  (`Home&Kitchen|HomeDecor|Lighting`) and a flat sample value (`Electronics`)
+  follow the same rule. Widening to a category changes which rows are analyzed,
+  never what a row is: counts stay in the dataset's own unit and the per-unit
+  evidence threshold still applies.
 - Date range — only for data that carries per-review dates. Datasets without a
   date field (see Data sources) hide the control rather than show an empty or
   invented window.
@@ -111,6 +116,9 @@ Rows are parsed in the browser. No database, no accounts.
   report to the clipboard is in scope; producing files is not)
 - Authentication and user accounts
 - Historical analytics — no analysis is stored or compared across runs
+- Cross-category ranking — comparing categories against one another to say which
+  has the most complaints. Category-level *theme* analysis is in scope; ranking
+  categories against each other is a separate future feature.
 
 ## Success
 
