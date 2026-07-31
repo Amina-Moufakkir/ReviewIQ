@@ -314,6 +314,58 @@ So the summary sentence and every number are computed in code under **both**
 engines; what the Claude engine changes is *how themes and per-mention sentiment
 are detected* (language understanding vs. a fixed keyword list + star rating).
 
+#### The pipeline
+
+The model is the only nondeterministic component in the system, and it is
+sandwiched between deterministic validation and deterministic assembly. It
+proposes; code disposes.
+
+```mermaid
+flowchart TD
+    A["filterReviews()<br/>product + date window"] --> B{"rows matched?"}
+    B -- none --> Z["zeroResult()<br/>no network call, no cost"]
+    B -- "1..n" --> REQ["POST /api/analyze<br/>id + text only — the rating is NOT sent"]
+
+    REQ --> V["parseReviewRequest + size caps<br/>100 reviews · 250 KB body · 200 KB text"]
+    V -- rejected --> E1["400 / 413"]
+    V -- ok --> M["CLAUDE — tags each theme mention<br/>30s timeout · no retries"]
+
+    M --> RAW["tags — review_id · theme · sentiment · evidence_span"]
+
+    RAW --> G1["SERVER GATE — validateModelResponse<br/>drop: unknown review id · bad sentiment<br/>· evidence not a verbatim substring"]
+    G1 -- "all dropped" --> E2["502 analysis_failed"]
+    G1 -- survivors --> RESP["200 — validated tags"]
+
+    RESP --> G2["CLIENT GATE — validateTags<br/>same rules, stricter policy"]
+    G2 -- "any dropped or deduped" --> E3["AnalysisError<br/>version mismatch or tampering"]
+    G2 -- clean --> T["tagsToResult<br/>group by theme · count UNIQUE review ids<br/>· evidence threshold · quote · percent"]
+
+    T --> S["buildSummary + recommendationsFor<br/>every displayed sentence composed in TypeScript"]
+    S --> OUT["AnalysisResult<br/>identical contract to the heuristic engine"]
+
+    classDef nd fill:#fde68a,stroke:#b45309,color:#111827
+    classDef gate fill:#bbf7d0,stroke:#15803d,color:#111827
+    classDef err fill:#fecaca,stroke:#b91c1c,color:#111827
+    class M nd
+    class G1,G2 gate
+    class E1,E2,E3 err
+```
+
+Three properties are worth reading off the diagram:
+
+- **The rating never reaches the model.** It is absent from the request, so
+  sentiment cannot be influenced by it — a structural guarantee rather than an
+  instruction the prompt asks the model to follow.
+- **The evidence check is a code gate, not a prompt rule.** Theme naming and
+  clustering vary between runs; whether a claim is allowed to appear does not.
+  Measured across three runs on identical text: different groupings each time,
+  zero ungrounded quotes every time.
+- **The second gate is stricter than the first by design.** The server is
+  lenient toward an untrusted model — it keeps valid tags and discards bad ones.
+  The client trusts the server, so *any* rejection there means a version
+  mismatch or a tampered response, and the whole request fails rather than
+  rendering a partial report.
+
 ### Why the second engine exists
 
 On ordinary review data the two engines are close: one row is one customer with
