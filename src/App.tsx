@@ -336,6 +336,7 @@ export default function App() {
                 result={state.result}
                 unit={unit}
                 hasDates={hasReviewDates}
+                scopeKind={scopeKind}
                 sentimentSource={SENTIMENT_SOURCE}
               />
             ) : null}
