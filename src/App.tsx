@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import type { AnalysisInput, Dataset, Review } from "./types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { AnalysisInput, AnalysisScope, Dataset, Review } from "./types";
 import { sampleDataset } from "./data/sampleDataset";
 import { reviewStatsFor } from "./services/analysisEngine";
 import { parseReviewsCsv, loadStatsFor, CsvError, type LoadStats } from "./lib/parseReviews";
@@ -11,6 +11,7 @@ import {
   AMAZON_DEMO_FILE,
   AMAZON_DEMO_LABEL,
   SAMPLE_CSV_FILE,
+  categoriesIn,
   hasDates,
   unitFor,
 } from "./lib/datasetInfo";
@@ -132,14 +133,21 @@ function loadErrorMessage(err: unknown, fallback: string): string {
 export default function App() {
   const [dataset, setDataset] = useState<Dataset>(PENDING_AMAZON_DATASET);
   const [productId, setProductId] = useState("");
+  const [scopeKind, setScopeKind] = useState<AnalysisScope["kind"]>("product");
+  const [category, setCategory] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+
+  // Alphabetical, with sizes — the size is the analyst's only warning that a
+  // category may exceed the Claude engine's per-request cap.
+  const categories = useMemo(() => categoriesIn(dataset), [dataset]);
 
   // The analyst's live query. Passing it to the hook is what guarantees the
   // visible result always describes the current selection — editing any part
   // of it clears the previous report rather than leaving it stranded.
-  // Product scope only for now; the scope control arrives with the UI change.
-  const query: AnalysisInput = { scope: { kind: "product", productId }, from, to };
+  const scope: AnalysisScope =
+    scopeKind === "category" ? { kind: "category", category } : { kind: "product", productId };
+  const query: AnalysisInput = { scope, from, to };
   const { state, analyze, reset } = useAnalysis(query);
 
   const [isLoadingDataset, setIsLoadingDataset] = useState(true);
@@ -157,6 +165,11 @@ export default function App() {
       const span = datasetSpan(next.reviews);
       setDataset(next);
       setProductId(next.products[0]?.id ?? "");
+      // A new dataset has its own categories; carrying the old selection over
+      // would leave a category chosen that nothing in this data belongs to.
+      const nextCategories = categoriesIn(next);
+      setCategory(nextCategories[0]?.category ?? "");
+      if (nextCategories.length === 0) setScopeKind("product");
       setFrom(span.from);
       setTo(span.to);
       setLoadStats(stats);
@@ -267,6 +280,11 @@ export default function App() {
           <AnalyzeForm
             products={dataset.products}
             productId={productId}
+            scopeKind={scopeKind}
+            categories={categories}
+            category={category}
+            onScopeKindChange={setScopeKind}
+            onCategoryChange={setCategory}
             from={from}
             to={to}
             productStats={productStats}

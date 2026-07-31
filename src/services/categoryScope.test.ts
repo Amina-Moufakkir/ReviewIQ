@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { AnalysisInput, Product, Review } from "../types";
 import { analyze, selectForScope, AnalysisError } from "./analysisEngine";
-import { PRODUCT_RECORD, REVIEW } from "../lib/datasetInfo";
+import { categoriesIn, PRODUCT_RECORD, REVIEW } from "../lib/datasetInfo";
+import type { Dataset } from "../types";
 
 /**
  * Two products in one category, one in another — the shape category scope
@@ -150,5 +151,41 @@ describe("analyze at category scope — the unit is unchanged by widening", () =
   it("reports the category as the subject in the result", () => {
     const result = analyze(category("Electronics", WIDE.from, WIDE.to), REVIEWS, PRODUCTS, REVIEW);
     expect(result.productName).toBe("Electronics");
+  });
+});
+
+describe("categoriesIn — what the picker offers", () => {
+  const dataset: Dataset = {
+    products: PRODUCTS,
+    reviews: REVIEWS,
+    source: "uploaded",
+    label: "t.csv",
+  };
+
+  it("lists each top-level category once, alphabetically", () => {
+    expect(categoriesIn(dataset).map((c) => c.category)).toEqual(["Electronics", "Kitchen"]);
+  });
+
+  it("counts both the products in a category and the rows the engine would read", () => {
+    const [electronics, kitchen] = categoriesIn(dataset);
+    expect(electronics).toEqual({ category: "Electronics", productCount: 2, rowCount: 3 });
+    expect(kitchen).toEqual({ category: "Kitchen", productCount: 1, rowCount: 1 });
+  });
+
+  // An unlabelled product cannot be analyzed as part of anything, so offering a
+  // blank category would offer a selection that selects nothing coherent.
+  it("omits products carrying no category key rather than grouping them under a blank", () => {
+    const withBlank: Dataset = {
+      ...dataset,
+      products: [...PRODUCTS, { id: "x", name: "Loose", category: "", topCategory: "" }],
+      reviews: [...REVIEWS, review("x1", "x", "2026-02-01", 5, "Fine.")],
+    };
+    const keys = categoriesIn(withBlank).map((c) => c.category);
+    expect(keys).toEqual(["Electronics", "Kitchen"]);
+    expect(keys.every(Boolean)).toBe(true);
+  });
+
+  it("returns nothing for an empty dataset, so the scope control can hide", () => {
+    expect(categoriesIn({ ...dataset, products: [], reviews: [] })).toEqual([]);
   });
 });
