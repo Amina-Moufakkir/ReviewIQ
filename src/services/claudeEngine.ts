@@ -1,5 +1,5 @@
 import type { AnalysisInput, AnalysisResult, Dataset } from "../types";
-import { AnalysisError, filterReviews } from "./analysisEngine";
+import { AnalysisError, selectForScope } from "./analysisEngine";
 import { validateTags } from "./claudeTags";
 import { tagsToResult, zeroResult } from "./tagsToResult";
 import { unitFor } from "../lib/datasetInfo";
@@ -18,21 +18,22 @@ export async function analyzeWithClaude(
   input: AnalysisInput,
   dataset: Dataset,
 ): Promise<AnalysisResult> {
-  const product = dataset.products.find((p) => p.id === input.productId);
-  if (!product) throw new AnalysisError(`Unknown product: ${input.productId}`);
-  if (input.from > input.to) {
-    throw new AnalysisError("The start date must be on or before the end date.");
-  }
-
-  const matched = filterReviews(dataset.reviews, input.productId, input.from, input.to);
+  // Same resolver the heuristic engine uses, so both engines always read the
+  // identical row set for a given query — the premise the comparison rests on.
+  const { subject: product, rows: matched } = selectForScope(
+    input,
+    dataset.reviews,
+    dataset.products,
+  );
   // No reviews in the window: return the empty result without a network call —
   // this is the legitimate empty state, not a fallback.
   if (matched.length === 0) return zeroResult(product, input, unitFor(dataset));
 
   // Text only: sentiment on this path is derived from the review body, so the
   // rating is not sent. See "Which engine for which data" in README.md.
+  // No subject id: the endpoint reads `reviews` and nothing else, and a
+  // `productId` field would have to carry a category name under category scope.
   const body = JSON.stringify({
-    productId: input.productId,
     reviews: matched.map((r) => ({ id: r.id, text: r.text })),
   });
 

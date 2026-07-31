@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { AnalysisInput, AnalysisResult, Dataset } from "../types";
+import type { AnalysisInput, AnalysisResult, AnalysisScope, Dataset } from "../types";
 import { analyzeReviews, AnalysisError } from "../services/analyzeReviews";
 
 /**
@@ -14,9 +14,15 @@ export type AnalysisState =
   | { status: "empty"; result: AnalysisResult }
   | { status: "error"; message: string };
 
+/** Whether two scopes name the same subject. */
+function isSameScope(a: AnalysisScope, b: AnalysisScope): boolean {
+  if (a.kind === "product") return b.kind === "product" && a.productId === b.productId;
+  return b.kind === "category" && a.category === b.category;
+}
+
 /** Whether two queries would select the same reviews. */
 export function isSameQuery(a: AnalysisInput, b: AnalysisInput): boolean {
-  return a.productId === b.productId && a.from === b.from && a.to === b.to;
+  return isSameScope(a.scope, b.scope) && a.from === b.from && a.to === b.to;
 }
 
 /**

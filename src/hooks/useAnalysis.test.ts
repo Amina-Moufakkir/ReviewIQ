@@ -2,7 +2,11 @@ import { describe, it, expect } from "vitest";
 import { isSameQuery, stateForQuery, type AnalysisState } from "./useAnalysis";
 import type { AnalysisInput, AnalysisResult } from "../types";
 
-const query = (productId: string, from = "", to = ""): AnalysisInput => ({ productId, from, to });
+const query = (productId: string, from = "", to = ""): AnalysisInput => ({
+  scope: { kind: "product", productId },
+  from,
+  to,
+});
 
 function resultFor(productName: string, reviewCount = 3): AnalysisResult {
   return {
@@ -103,7 +107,11 @@ describe("stateForQuery — which changes invalidate a result", () => {
   it("keeps the result across an unrelated re-render with an equal query object", () => {
     // A new object with the same values must not clear anything — this is what
     // stops results vanishing on every keystroke elsewhere in the UI.
-    const equivalent = { productId: "p1", from: "2026-01-01", to: "2026-06-01" };
+    const equivalent: AnalysisInput = {
+      scope: { kind: "product", productId: "p1" },
+      from: "2026-01-01",
+      to: "2026-06-01",
+    };
     expect(stateForQuery(success, analyzed, equivalent)).toBe(success);
   });
 });

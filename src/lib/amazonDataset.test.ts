@@ -55,7 +55,7 @@ function assertAdapterInvariants(name: string, result: AmazonAdapterResult) {
     // The boundary (analyzeReviews) is what decides the unit, so assert through
     // it: dropping unitFor() there is invisible to the engine's own tests.
     const product = dataset.products[0]!;
-    return analyzeReviews({ productId: product.id, from: "", to: "" }, dataset).then((result) => {
+    return analyzeReviews({ scope: { kind: "product", productId: product.id }, from: "", to: "" }, dataset).then((result) => {
       expect(result.summary).toMatch(/product records?/i);
       expect(result.summary).not.toMatch(/\breviews?\b/i);
     });
@@ -86,7 +86,7 @@ function assertAdapterInvariants(name: string, result: AmazonAdapterResult) {
   it(`${name}: runs the heuristic engine over the empty window for every product`, () => {
     for (const product of dataset.products) {
       const analysis = analyze(
-        { productId: product.id, from: "", to: "" },
+        { scope: { kind: "product", productId: product.id }, from: "", to: "" },
         dataset.reviews,
         dataset.products,
       );
@@ -300,7 +300,7 @@ describe.skipIf(!hasRealFixture)("Amazon adapter — real generated fixture", ()
 describe("Amazon analysis — single-record products still produce findings", () => {
   function findingsFor(result: AmazonAdapterResult, productId: string) {
     return analyze(
-      { productId, from: "", to: "" },
+      { scope: { kind: "product", productId }, from: "", to: "" },
       result.dataset.reviews,
       result.dataset.products,
       unitFor(result.dataset),

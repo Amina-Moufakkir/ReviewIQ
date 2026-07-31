@@ -138,7 +138,8 @@ export default function App() {
   // The analyst's live query. Passing it to the hook is what guarantees the
   // visible result always describes the current selection — editing any part
   // of it clears the previous report rather than leaving it stranded.
-  const query: AnalysisInput = { productId, from, to };
+  // Product scope only for now; the scope control arrives with the UI change.
+  const query: AnalysisInput = { scope: { kind: "product", productId }, from, to };
   const { state, analyze, reset } = useAnalysis(query);
 
   const [isLoadingDataset, setIsLoadingDataset] = useState(true);

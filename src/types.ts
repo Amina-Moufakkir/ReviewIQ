@@ -93,9 +93,20 @@ export interface Finding {
   quoteAuthor: string;
 }
 
+/**
+ * What the analyst chose to analyze: one product, or one whole category.
+ *
+ * A discriminated union rather than an optional `category` field, so "category
+ * scope carrying a product id" cannot be represented at all. Scope widens WHICH
+ * rows are analyzed; it never changes WHAT a row is — that stays `DatasetUnit`.
+ */
+export type AnalysisScope =
+  | { kind: "product"; productId: string }
+  | { kind: "category"; category: string };
+
 /** The inputs an analyst chooses before running an analysis. */
 export interface AnalysisInput {
-  productId: string;
+  scope: AnalysisScope;
   /** Inclusive ISO start date. */
   from: string;
   /** Inclusive ISO end date. */

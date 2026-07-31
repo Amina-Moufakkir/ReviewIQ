@@ -5,7 +5,11 @@ import { tagsToResult } from "./tagsToResult";
 import { PRODUCT_RECORD } from "../lib/datasetInfo";
 
 const PRODUCT: Product = { id: "p1", name: "Test Widget", category: "Electronics", topCategory: "Electronics" };
-const INPUT: AnalysisInput = { productId: "p1", from: "2026-01-01", to: "2026-12-31" };
+const INPUT: AnalysisInput = {
+  scope: { kind: "product", productId: "p1" },
+  from: "2026-01-01",
+  to: "2026-12-31",
+};
 
 function review(id: string, text: string, author: string): Review {
   return { id, productId: "p1", date: "2026-02-01", rating: 5, text, author };
