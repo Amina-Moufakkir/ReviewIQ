@@ -3,6 +3,7 @@ import { THEME_LIBRARY, type ThemeDef } from "./themeLibrary";
 import { matchesKeyword } from "../lib/matchKeyword";
 import { analyzePromotions } from "./promotionAnalysis";
 import { REVIEW, scopeLabel, themePhrase, type DatasetUnit } from "../lib/datasetInfo";
+import { lowerFirst } from "../lib/themeLabel";
 
 /**
  * Pure, synchronous analysis engine. No React, no I/O, no latency — so it is
@@ -279,9 +280,6 @@ function datedRows(rows: Review[]): boolean {
   return rows.length > 0 && rows.every((r) => r.date !== "");
 }
 
-function lowerFirst(s: string): string {
-  return s.charAt(0).toLowerCase() + s.slice(1);
-}
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
