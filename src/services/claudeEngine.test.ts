@@ -157,3 +157,64 @@ describe("analyzeWithClaude — strict response integrity (second gate)", () => 
     expect(result.faults).toHaveLength(0);
   });
 });
+
+describe("analyzeWithClaude — controlled status mapping", () => {
+  /** A response with no readable `{ error: { message } }` — e.g. an edge sign-in page. */
+  function opaque(status: number): Response {
+    return new Response("<!doctype html><title>Sign in</title>", {
+      status,
+      headers: { "content-type": "text/html" },
+    });
+  }
+
+  async function messageFor(response: Response): Promise<string> {
+    mockFetch(() => response);
+    try {
+      await analyzeWithClaude(INPUT, DATASET);
+    } catch (err) {
+      return (err as AnalysisError).message;
+    }
+    throw new Error("expected analyzeWithClaude to throw");
+  }
+
+  it("prefers the endpoint's own controlled message when there is one", async () => {
+    const message = await messageFor(
+      jsonResponse({ error: { code: "analysis_disabled", message: "AI analysis is temporarily unavailable." } }, 503),
+    );
+    expect(message).toBe("AI analysis is temporarily unavailable.");
+  });
+
+  it.each([401, 403])(
+    "explains deployment protection on %i, which is blocked at the edge with no JSON body",
+    async (status) => {
+      const message = await messageFor(opaque(status));
+      expect(message).toMatch(/requires sign-in/i);
+    },
+  );
+
+  it("maps an opaque 503 to the disabled message", async () => {
+    expect(await messageFor(opaque(503))).toMatch(/temporarily unavailable/i);
+  });
+
+  it("maps an opaque 429 to a busy message that invites a retry", async () => {
+    expect(await messageFor(opaque(429))).toMatch(/busy/i);
+  });
+
+  it("maps an opaque 504 to a timeout message that suggests a smaller selection", async () => {
+    const message = await messageFor(opaque(504));
+    expect(message).toMatch(/timed out/i);
+    expect(message).toMatch(/smaller selection/i);
+  });
+
+  it("maps an opaque 413 to over-limit guidance naming the heuristic engine", async () => {
+    expect(await messageFor(opaque(413))).toMatch(/heuristic engine/i);
+  });
+
+  it("never surfaces a raw status code or provider wording to the analyst", async () => {
+    for (const status of [401, 403, 429, 500, 502, 503, 504]) {
+      const message = await messageFor(opaque(status));
+      expect(message).not.toMatch(/\b(4\d{2}|5\d{2})\b/);
+      expect(message).not.toMatch(/anthropic|api key|sk-ant/i);
+    }
+  });
+});

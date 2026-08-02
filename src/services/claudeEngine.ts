@@ -102,7 +102,15 @@ export async function analyzeWithClaude(
   return tagsToResult(input, product, matched, valid, unitFor(dataset));
 }
 
-/** Map a non-2xx endpoint status to a controlled, non-leaky user message. */
+/**
+ * Map a non-2xx endpoint status to a controlled, non-leaky user message.
+ *
+ * The endpoint's own `{ error: { message } }` is preferred, because it knows
+ * more than the status code does. The fallbacks below matter for the cases
+ * where there is no such body to read: `401`/`403` come from Vercel's
+ * deployment protection at the edge, before the function runs at all, so the
+ * response is the platform's sign-in page rather than our JSON.
+ */
 async function messageForStatus(response: Response): Promise<string> {
   // Prefer the endpoint's controlled { error: { message } }, if present.
   try {
@@ -112,13 +120,24 @@ async function messageForStatus(response: Response): Promise<string> {
   } catch {
     // fall through to a generic message
   }
+  // Blocked at the edge, not by the function: this deployment is access
+  // controlled and the browser is not signed in (or the session lapsed).
+  if (response.status === 401 || response.status === 403) {
+    return "This deployment requires sign-in. Sign in to the protected demo and try again.";
+  }
+  if (response.status === 503) return "AI analysis is temporarily unavailable.";
+  if (response.status === 429) {
+    return "The analysis service is busy right now. Please try again in a moment.";
+  }
   // Deliberately says nothing about a date range: undated data has no window
   // to narrow, and this fires only when the endpoint's own message was
   // unreadable, so it cannot know what the caller selected.
   if (response.status === 413) {
     return "That selection is too large for the Claude engine. Analyze a smaller selection, or use the heuristic engine, which has no limit.";
   }
-  if (response.status === 504) return "The analysis timed out. Try a narrower date range.";
+  if (response.status === 504) {
+    return "The analysis timed out. Analyze a smaller selection and try again.";
+  }
   return "The analysis service is unavailable right now. Please try again.";
 }
 

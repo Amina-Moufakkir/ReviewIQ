@@ -1,5 +1,6 @@
 import type { FormEvent } from "react";
 import type { AnalysisScope, Product, ReviewStats } from "../types";
+import type { AnalysisEngine } from "../config";
 import {
   dateRangeSuffix,
   formatCount,
@@ -38,6 +39,12 @@ interface AnalyzeFormProps {
   onToChange: (date: string) => void;
   onSubmit: () => void;
   isLoading: boolean;
+  /**
+   * Which engine will run. The note under the button is the only place the app
+   * tells an analyst where their review text goes, and the two engines answer
+   * that question differently — so it cannot be written once for both.
+   */
+  engine: AnalysisEngine;
 }
 
 /** The analyst's query panel: product + window + run action. */
@@ -59,6 +66,7 @@ export function AnalyzeForm({
   onToChange,
   onSubmit,
   isLoading,
+  engine,
 }: AnalyzeFormProps) {
   const rangeError =
     hasDates && from && to && from > to ? "Start date must be on or before the end date." : "";
@@ -159,9 +167,22 @@ export function AnalyzeForm({
           )}
         </button>
 
-        <p className="font-mono text-[11px] leading-relaxed text-ink-soft">
-          Prototype: deterministic analysis over the selected dataset.
-        </p>
+        {/* Where the review text goes. The previous single line called every
+            run "deterministic analysis over the selected dataset", which was
+            wrong twice on the Claude path: that engine is not deterministic,
+            and the text does leave the browser. Each engine now states its own
+            behavior, and both statements are true of the code that runs. */}
+        {engine === "claude" ? (
+          <p className="font-mono text-[11px] leading-relaxed text-ink-soft">
+            The selected review text is sent to Anthropic for analysis. ReviewIQ does not
+            permanently store the uploaded CSV or review text.
+          </p>
+        ) : (
+          <p className="font-mono text-[11px] leading-relaxed text-ink-soft">
+            Prototype: deterministic keyword analysis, run entirely in your browser. No review
+            text leaves this page.
+          </p>
+        )}
       </div>
     </form>
   );

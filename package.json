@@ -11,7 +11,8 @@
     "test": "vitest run",
     "build": "tsc -b && vite build",
     "build:amazon": "node scripts/build-amazon-csv.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:bundle": "node scripts/verify-bundle.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

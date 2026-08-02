@@ -73,14 +73,21 @@ shape, so the UI does not change between them.
   That is the case the rating-based engine cannot represent. Required for data
   whose rating is a product average over many customers, where a rating-based
   engine cannot see a complaint written inside a highly-rated record. Calls a
-  server function that holds the API key **in local development only** — the
-  deployed function is keyless by decision and answers
-  `500 server_misconfigured`.
+  server function that holds the API key. The **public** deployment is keyless
+  and the endpoint is disabled there by decision; the Claude engine runs only in
+  local development and on a separate **access-controlled preview deployment**.
 
-The Claude engine is currently verified locally only and is not enabled on the
-live deployment. The UI states which engine produced a given result, and an
-empty findings column says whether nothing was found or the engine could not
-look.
+The Claude engine is not enabled on the public deployment. The UI states which
+engine produced a given result, says where the review text goes before a run
+starts, and an empty findings column says whether nothing was found or the
+engine could not look.
+
+At present the Claude engine is reliable only on small selections: one
+synchronous request cannot reach category scale, and larger selections surface a
+controlled timeout rather than a wrong answer. Category-scale support is
+designed but not yet built — see `docs/adr/0001-category-scale-claude-analysis.md`.
+Access control for the protected demo is Vercel platform configuration, not an
+in-app account system; "Authentication and user accounts" stays out of scope.
 
 ## Evidence rules
 

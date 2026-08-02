@@ -295,6 +295,7 @@ export default function App() {
             onToChange={setTo}
             onSubmit={() => analyze(query, dataset)}
             isLoading={state.status === "loading"}
+            engine={ANALYSIS_ENGINE}
           />
 
           {/* Single polite live region announcing analysis status and results. */}
