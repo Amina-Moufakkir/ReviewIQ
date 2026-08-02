@@ -11,3 +11,7 @@
 # See "Amazon dataset" in README.md.
 src/amazon.csv
 public/amazon-products.csv
+
+# Design docs and local benchmark artifacts — not needed at runtime.
+bench/
+docs/

@@ -12,31 +12,22 @@ import {
   parseReviewRequest,
   toRawTag,
   validateModelResponse,
-  type IncomingReview,
 } from "../src/services/claudeTags.js";
+// The prompt lives in its own server-only module so the local benchmark
+// (scripts/bench-models.ts) can measure exactly what this handler sends,
+// without importing the HTTP layer. See api/claudePrompt.ts.
+import {
+  SYSTEM_PROMPT,
+  buildUserContent,
+  MAX_OUTPUT_TOKENS,
+  CLAUDE_TIMEOUT_MS,
+} from "./claudePrompt.js";
 
 // Allow up to the Claude call's own 30s timeout plus response overhead.
 export const config = { maxDuration: 60 };
 
 /** Model is overridable via env; defaults to the current Opus per Anthropic guidance. */
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-4-8";
-const MAX_OUTPUT_TOKENS = 16000;
-const CLAUDE_TIMEOUT_MS = 30_000;
-
-const SYSTEM_PROMPT = `You are a semantic tagging layer for customer product reviews. You identify themes and assign sentiment; you do NOT write reports or summaries.
-
-For the batch of reviews given, produce tags. Rules:
-- Identify specific product themes from the actual language customers use.
-- Cluster semantically equivalent descriptions under ONE concise, human-readable canonical theme label, and use that SAME label consistently across the entire batch (e.g. "died after a week", "won't hold a charge", and "battery's useless" all map to one battery-life theme).
-- Assign sentiment to each theme MENTION independently, from the review text: "praise", "fault", or "neutral". Sentiment belongs to the mention, not to the review as a whole — one review may praise one theme and fault another.
-- You are given review TEXT only — there are no star ratings in this input. Sentiment must come from the words themselves, and you must NEVER create a theme the text does not support.
-- Do not invent themes with no supporting text. Avoid vague labels like "quality", "positive", "negative", "product", or "general experience".
-- "evidence_span" MUST be an exact substring copied verbatim from that review's text (same casing and punctuation).
-- A single review may produce multiple tags.
-
-Output STRICT JSON only — a single array, no prose, no markdown code fences. Each element:
-{"review_id": string, "theme": string, "sentiment": "praise" | "fault" | "neutral", "evidence_span": string}
-Output ONLY the JSON array.`;
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   const requestId = randomUUID();
@@ -142,20 +133,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 }
 
 // --- helpers ----------------------------------------------------------------
-
-/**
- * The user turn: reviews as JSON, TEXT ONLY.
- *
- * Star ratings are deliberately absent. This path exists for data whose rating
- * is a product-AVERAGE over thousands of customers, so it describes no single
- * review's text and is evidence about no particular theme. Withholding it makes
- * "sentiment comes from the text" a property of the input rather than a rule
- * the prompt has to ask the model to respect.
- */
-function buildUserContent(reviews: IncomingReview[]): string {
-  const payload = reviews.map((r) => ({ review_id: r.id, text: r.text }));
-  return `Reviews to tag:\n${JSON.stringify(payload)}`;
-}
 
 function sendError(res: VercelResponse, status: number, code: string, message: string): void {
   res.status(status).json({ error: { code, message } });
