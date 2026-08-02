@@ -1,6 +1,8 @@
 # ADR 0001 — Category-scale Claude analysis
 
-**Status:** proposed, awaiting approval. Nothing implemented.
+**Status:** approved in direction; revised 2026-08-02 with rolling adaptive
+sizing, bounded/hierarchical canonicalization, pre-run cost confirmation, and
+browser-orchestration semantics. Nothing implemented.
 **Date:** 2026-08-02
 **Supersedes:** the single-request Claude path in `api/analyze.ts` + `src/services/claudeEngine.ts`
 
@@ -74,6 +76,13 @@ never receives review text.
 - No new infrastructure, no new vendor, no persistence.
 - **A page refresh loses an in-flight run.** Acceptable at demo scale; the cost of
   avoiding it is a durable job store (§Storage).
+- **Batch boundaries vary between runs**, because sizing adapts to observed
+  density. Coverage, order and aggregation stay invariant; reproducible
+  boundaries do not.
+- **Hierarchical canonicalization may fragment cross-group synonyms**, splitting
+  one concept's support across two themes and under-counting both. Grounding is
+  unaffected; consolidation is not guaranteed. See the analytical limitation
+  under §Cross-batch theme canonicalization.
 - One new model-driven step (label grouping) is added — but it replaces an
   *implicit* one that today happens inside every batch prompt, and it is
   separately validated. Net auditability improves.
@@ -125,23 +134,25 @@ and **which span of text supports it**. Every number remains TypeScript.
         ├─ guard: rows.length <= MAX_ROWS_PER_ANALYSIS
         │         else AnalysisError (names the count; never truncates)
         │
-        ├─ calibration batch (2 rows) ──► POST /api/analyze ──► messages.stream
-        │        ◄── tags + usage.output_tokens
-        │        └─ measuredOutputTokPerRow
+        ├─ estimateRun(rows) ─► { batches, runtime, costUsd }
+        │         if costUsd > CONFIRM_ABOVE_USD → await user confirmation
         │
-        ├─ planBatches(rows, density) ─► Batch[]            (deterministic)
+        ├─ runId = randomUUID()   AbortController per run
         │
-        ├─ fan-out, concurrency 6, AbortSignal
-        │     ┌──────────────┐
-        │     │ batch 1..N   │──────────► POST /api/analyze ──► messages.stream
-        │     └──────────────┘◄── { tags[] }   (server validated: gate 1)
-        │            │
-        │            ├─ client re-validation   (gate 2, strict)
-        │            └─ held in memory only    ◄── NO PERSISTENCE
+        ├─ fan-out, concurrency 6           ┌─ rolling resize ─────────────┐
+        │     ┌──────────────┐              │ density = EWMA(observed)     │
+        │     │ batch 1..N   │───► POST /api/analyze ──► messages.stream   │
+        │     └──────────────┘◄── { tags[] } │ latency > 18s ⇒ halve       │
+        │            │                      │ applies to UNDISPATCHED only │
+        │            │                      └──────────────────────────────┘
+        │            ├─ drop if runId ≠ current   (superseded run)
+        │            ├─ client re-validation      (gate 2, strict)
+        │            └─ held in memory only       ◄── NO PERSISTENCE
         │
         ├─ distinct labels ────────────► POST /api/canonicalize ──► messages.stream
+        │            │  ≤300 labels: one pass;  >300: hierarchical, sorted chunks
         │            ◄── { groups: number[][] }   (labels only, no review text)
-        │            └─ validate mapping (total / closed / acyclic)
+        │            └─ validate composed map (total / closed / shrinking)
         │
         ├─ apply mapping → dedup(reviewId, canonicalKey, sentiment)
         ├─ count unique supporting rows
@@ -178,23 +189,103 @@ subject to:  batchTextBytes <= 16 KB     // secondary guard
              batchRows      <= 12        // hard cap, independently enforced server-side
 ```
 
-`measuredOutputTokPerRow` comes from a **calibration batch**: the first 2 rows of
-the selection, run first, whose `usage.output_tokens` sets the size for the rest.
-This is a real measurement of *this* dataset rather than a formula, and it costs
-nothing extra — the calibration batch is batch 1, just smaller.
+#### Rolling adaptive sizing
 
-Before calibration returns, the conservative dense default (405 tok/row) applies.
+`measuredOutputTokPerRow` is **re-estimated after every successful batch**, not
+measured once. A single up-front calibration assumes a category is uniform, and
+categories are not: a run can start on terse listings and reach verbose ones
+halfway through, at which point a size fixed by batch 1 is already wrong.
 
-**Adaptive narrowing:** if any batch returns `stop_reason: "max_tokens"` or times
-out, halve `rowsPerBatch` for all remaining batches and retry that batch once at
-the smaller size. This absorbs density variance *within* a category, which a
-single up-front measurement cannot.
+```
+seed:      density = 405 tok/row        // conservative dense default
+on each successful batch b:
+           observed = b.outputTokens / b.rows
+           density  = 0.6 * observed + 0.4 * density      // EWMA, recent-weighted
+           latency  = 0.6 * b.latencyMs + 0.4 * latency
+resize:    next = clamp(floor(TARGET_OUTPUT_TOKENS / density), 1, MAX_ROWS_PER_BATCH)
+           next = min(next, ceil(1.5 * currentRows))      // grow slowly
+           if latency > LATENCY_SHRINK_MS (18 s):         // proactive, pre-failure
+               next = max(1, floor(currentRows / 2))
+apply to:  batches not yet dispatched — in-flight batches keep their size
+```
+
+The first batch is still deliberately small (2 rows) so the first observation
+arrives early and costs little; it is batch 1, not an extra request.
+
+Two signals drive resizing, and the latency one matters most. Token density
+tells us what a batch *will* emit; observed latency tells us how close the
+current size is running to the 30 s wall. Shrinking when p50 latency crosses 18 s
+resizes **before** a batch fails rather than after — which is the difference
+between a run that slows down and a run that loses a batch to a timeout.
+
+**Timeout-based halving is retained as the reactive fallback.** If a batch still
+returns `stop_reason: "max_tokens"` or times out, halve the size for all
+remaining batches and retry that batch once at the smaller size. The rolling
+estimate should make this rare; keeping it means an abrupt density change cannot
+cascade into repeated failures.
+
+Growth is capped at 1.5× per adjustment so one unusually terse batch cannot
+enlarge the next batch into a timeout. Shrinking is not rate-limited — reacting
+slowly to a size that is failing has no upside.
+
+#### These constants are provisional, and must stay observable
+
+`SEED_DENSITY`, `DENSITY_EWMA_ALPHA`, `LATENCY_SHRINK_MS` and
+`MAX_GROWTH_FACTOR` are **tuning decisions extrapolated from a small benchmark**:
+two datasets, one model, a handful of sizes. They are reasonable starting values,
+not measured optima, and nothing downstream should treat them as settled. They
+belong in configuration, not scattered as literals.
+
+Tuning them later has to be evidence-based rather than another guess, so every
+resize decision is logged with the inputs that produced it:
+
+| field | why |
+| --- | --- |
+| `plannedRows` | what the planner intended for this batch |
+| `actualRows` | what was dispatched — divergence means a bound clamped it |
+| `observedOutputTokPerRow` | the measurement this batch contributed |
+| `densityAfter` | the EWMA value after folding it in |
+| `observedLatencyMs` / `latencyAfter` | raw and smoothed latency |
+| `nextRows` | the size computed for the following dispatch |
+| `resizeReason` | `"ewma"`, `"latency_pressure"`, `"timeout"`, `"truncation"`, or `"unchanged"` |
+
+`resizeReason` is the field that makes the data usable: it separates a size that
+drifted down because output genuinely got denser from one that was cut because a
+batch was already failing. Without it the log records that a resize happened but
+not whether the proactive path was doing any work — which is precisely the
+question the next round of tuning has to answer.
+
+### Two ceilings, never interchangeable
+
+The design has two row limits. They are different controls at different layers,
+and conflating them would silently change what the system enforces:
+
+| name | layer | means | enforced by |
+| --- | --- | --- | --- |
+| `MAX_ROWS_PER_ANALYSIS` | run | the largest **category** an analyst may submit at all | client, before any dispatch; a controlled error, never a truncation |
+| `MAX_ROWS_PER_BATCH` | request | the most rows sent to Claude in **one HTTP request** | the server, independently of whatever the client believes |
+
+`MAX_ROWS_PER_ANALYSIS` is a product and cost decision (60 on the protected
+demo, 600 locally). `MAX_ROWS_PER_BATCH` is a safety property of the endpoint —
+it bounds the blast radius of a single request and holds even if a client is
+buggy, stale, or hostile. One is about how much work a person may ask for; the
+other is about how much work one request may carry.
+
+**They must never be aliased, defaulted to one another, or described with the
+same word in code, logs, or UI copy.** In particular the user-facing over-limit
+message refers to the *analysis* ceiling; the server's 413 refers to the *batch*
+ceiling, and no analyst should ever see the latter — reaching it means the
+orchestrator is broken, not that the selection was too big.
 
 ### Recommended parameters
 
 | parameter | value | derivation |
 | --- | --- | --- |
 | `TARGET_OUTPUT_TOKENS` | 1,400 | 13 s at measured 110 tok/s |
+| `SEED_DENSITY` | 405 tok/row | measured dense-row default, used until batch 1 reports |
+| `DENSITY_EWMA_ALPHA` | 0.6 | recent-weighted; tracks drift without chasing one outlier |
+| `LATENCY_SHRINK_MS` | 18,000 | 60% of the 30 s wall — shrink before a batch fails |
+| `MAX_GROWTH_FACTOR` | 1.5× | one terse batch cannot enlarge the next into a timeout |
 | `MAX_ROWS_PER_BATCH` | 12 | server-enforced ceiling |
 | `MAX_BATCH_TEXT_BYTES` | 16 KB | secondary guard |
 | Concurrency | 6 | ~25 req/min; bounds abort blast radius |
@@ -209,8 +300,22 @@ single up-front measurement cannot.
 Batches carry an index; results are keyed by it. Aggregation never depends on
 completion order. Final ordering is a deterministic sort:
 `(supportingRows desc, canonicalLabel asc)`. Quote order:
-`(evidenceLength desc, rowIndex asc, evidence asc)`. The same query over the same
-dataset yields a byte-identical report modulo model non-determinism in tagging.
+`(evidenceLength desc, rowIndex asc, evidence asc)`.
+
+**What rolling sizing does and does not change.** Batch *boundaries* are no
+longer fixed in advance — they depend on observed density, which depends on
+model output, so two runs over the same selection may split it differently. What
+is invariant regardless:
+
+- rows are consumed in selection order, never reordered or sampled
+- every selected row lands in **exactly one** batch (asserted before aggregation)
+- the percentage denominator is captured at plan time and never re-derived
+- aggregation, thresholds, ordering and quote choice are pure functions of the
+  validated tag set
+
+So the report is deterministic given the tags; the batching is adaptive given
+the data. Claiming byte-identical reports across runs would be false, and was
+already false through model non-determinism in tagging.
 
 ### Deduplication across batches
 
@@ -287,9 +392,89 @@ groups** over a numbered label list, with the representative first:
 { "groups": [[3, 17, 42], [0], [8, 11]] }
 ```
 
-~1,200 tokens for 400 labels ≈ 11 s. For label sets beyond
-`MAX_LABELS_PER_CANONICALIZATION` (500), canonicalize in chunks and then
-canonicalize the surviving representatives — hierarchical, still bounded.
+~1,200 tokens for 400 labels ≈ 11 s.
+
+#### Bounded and hierarchical canonicalization
+
+Canonicalization is a Claude request like any other, so it is subject to the same
+30 s wall that broke the single-request tagging design. It gets its own explicit
+bounds rather than an assumption that the label set stays small.
+
+| bound | value | why |
+| --- | --- | --- |
+| `MAX_LABELS_PER_REQUEST` | 300 | ~900 output tokens of index groups ≈ 8 s |
+| `MAX_LABEL_BYTES_PER_REQUEST` | 24 KB | secondary guard on unusually long labels |
+| `MAX_CANONICALIZATION_LEVELS` | 3 | covers ~27,000 raw labels; beyond it, fail |
+
+**Level 0 — deterministic pre-merge.** `normalizeTheme` collapses labels that
+differ only in case or whitespace. Free, exact, and typically removes a large
+fraction before any model call.
+
+**Single pass.** If distinct labels ≤ `MAX_LABELS_PER_REQUEST`, one request. Done.
+
+**Hierarchical pass.** Otherwise:
+
+```
+level 0: sort labels by normalizeTheme ascending      (deterministic partition)
+         chunk into ceil(N / 300) groups
+         canonicalize each chunk independently, in parallel
+         -> representatives R0  (one per group, always an emitted label)
+level 1: if |R0| > 300, repeat over R0
+...      until |R| <= 300, then one final pass
+```
+
+Partitioning sorts before chunking, so the same label set always partitions the
+same way **regardless of the order batches happened to complete in**. Chunks are
+canonicalized in parallel, since each is independent.
+
+**How an original label maps through multiple levels.** Each level produces a
+total function `label -> representative`. The final map is their composition,
+applied deterministically:
+
+```
+canonical(label) = f_n( ... f_1( f_0(label) ) )
+```
+
+Composition is validated, not assumed:
+
+- each level's map is **total** over its own input set (every input has an image)
+- each image is a member of that level's input set, so the final canonical label
+  is always a **real emitted label** — no display name is invented at any level
+- each level's output set is strictly smaller than its input, or the level is a
+  fixed point and the walk stops — this is what makes termination provable
+  rather than bounded only by the level cap
+- the composed map is total over the *original* label set, and every original
+  label resolves in ≤ `MAX_CANONICALIZATION_LEVELS` hops
+- any violation fails the run
+
+#### Known analytical limitation — not an implementation detail
+
+Two synonyms can land in different level-0 chunks and fail to merge there:
+alphabetical order does not group meanings. They merge at level 1 if both survive
+as representatives, which is the common case — but not a guarantee, because a
+representative is chosen within its own chunk without sight of the others.
+
+**What this does and does not compromise.** Every finding remains fully grounded:
+each quote is still a verbatim span of a real row, each count is still unique
+supporting rows for the theme as reported, and nothing is invented. What can be
+wrong is **consolidation**: one concept may appear as two themes, so its support
+is split and each fragment counts lower than the concept deserves. A fragment can
+therefore fall under `MIN_EVIDENCE` and disappear from the report entirely — a
+finding that should have existed is absent, and nothing on screen indicates that.
+
+This is an **analytical limitation of the method**, not a defect to be fixed in
+review. It is accepted for this MVP with two consequences:
+
+- the flat single pass is preferred whenever the label set fits, and the
+  hierarchical path is a fallback rather than the default
+- **the product must not claim perfect semantic consolidation.** Copy describing
+  the Claude engine may say themes are grouped; it may not say they are grouped
+  exhaustively or that every mention of a concept is counted together.
+
+Failing the run on a malformed or invalid mapping remains correct and unchanged.
+A silent fallback to raw fragmented labels would produce exactly this
+under-counting *by default* while presenting a report that looks complete —
+turning an occasional, bounded limitation into an unannounced one.
 
 **Validation (all deterministic, any failure fails the run):**
 
@@ -409,6 +594,73 @@ the door stays open.
 
 ---
 
+## Browser orchestration semantics
+
+The browser owns the run, so the run's lifecycle rules have to be explicit.
+
+### Run identity
+
+Every run gets a `runId` (`crypto.randomUUID()`). It travels on each batch
+request for log correlation, and the orchestrator holds the *current* runId in a
+ref. **Any batch result whose runId is not the current one is discarded on
+arrival**, before validation and before aggregation. This is what makes a
+superseded run harmless rather than a source of mixed results: an in-flight
+response from an abandoned run cannot reach the aggregator even if its `fetch`
+resolves after the new run has started.
+
+### Cancellation
+
+One `AbortController` per run. Cancelling:
+
+1. aborts every in-flight `fetch`
+2. **clears the queue of unscheduled batches** — the scheduler checks
+   `signal.aborted` before dispatching each queued batch, so cancellation stops
+   *future* spend, not just current requests
+3. returns the UI to idle with no result and no error banner
+
+Cancellation is triggered by the Cancel control, by editing the query, and by
+starting a new run. It is a cost control as much as a UX affordance: on a
+five-minute run, the unscheduled batches are the bulk of the remaining spend.
+
+**Honest limit:** an already-dispatched request continues briefly on the server
+and is billed. Abort stops us waiting for it; it does not stop Anthropic
+generating it.
+
+### Duplicate submissions
+
+Submit is disabled while `status === "loading"`, so double-clicking cannot start
+two runs. If a run is started anyway (programmatically, or from a restored
+state), the new run **supersedes**: the previous controller is aborted, a new
+runId is minted, and late results from the old run are dropped by the runId
+check. Two runs never aggregate into one report.
+
+### Terminal batch failure
+
+The first terminal failure — a batch that exhausted its single retry, or any
+validation failure, or a canonicalization failure — immediately:
+
+1. aborts the run's controller, stopping sibling batches and clearing the queue
+2. sets `status: "error"` with the controlled message
+3. **constructs no `AnalysisResult`**
+
+Sibling batches are cancelled rather than allowed to finish, because their output
+can no longer be used and would only add cost.
+
+### Navigation and refresh
+
+Nothing is persisted, so a refresh or tab close loses the run. While
+`status === "loading"`, the app registers a `beforeunload` handler so the browser
+warns before discarding work in progress; it is removed the moment the run
+settles, so it never nags outside an active run. The warning is a mitigation, not
+a fix — the fix is the durable job API in *Future work*.
+
+### Report availability
+
+Copy and export are enabled **only** when `status === "success"`. They are
+unavailable while loading, on error, and after cancellation. Because the MVP has
+no partial-result path, there is no state in which a report exists but is
+incomplete — the guarantee is structural rather than a check on a flag.
+
 ## Storage decision
 
 **Do intermediate validated tags need temporary persistence?** Only if the
@@ -516,6 +768,58 @@ be wrong), and be excluded from copy/export.
 
 ---
 
+## Pre-run cost and runtime confirmation
+
+A category run can cost dollars and take minutes. Both are estimated **before any
+request is dispatched**, from the row count, the seed density (or the last
+density observed for this dataset in this session), the verified price table, and
+the concurrency setting:
+
+```
+batches      = ceil(rows / rowsPerBatch(SEED_DENSITY))
+inputTokens  = rows * inputTokPerRow + batches * PROMPT_OVERHEAD_TOKENS   // 760
+outputTokens = rows * SEED_DENSITY
+estCostUsd   = inputTokens/1e6 * inRate + outputTokens/1e6 * outRate
+estRuntimeMs = ceil(batches / CONCURRENCY) * estBatchLatencyMs
+```
+
+### Two ceilings, and the confirmation threshold
+
+| control | protected demo | local | behavior above |
+| --- | --- | --- | --- |
+| `MAX_ROWS_PER_ANALYSIS` | **60** | **600** | controlled error naming the row count and remedies — never a silent truncation |
+| `CONFIRM_ABOVE_USD` | **0.25** | **0.50** | explicit confirmation before dispatching |
+
+The ceilings differ because the exposures differ. The protected demo serves only
+the 25-row synthetic dataset, so 60 rows is far above anything it can legitimately
+be asked for and exists purely to bound a mistake. Local runs work against the
+real dataset, where a 526-row category is the *point*, so the ceiling has to
+accommodate it while still refusing something absurd.
+
+Which ceiling applies is a build-time constant, not a runtime negotiation.
+
+### The confirmation
+
+Above the threshold the analyst sees the estimate and must accept it:
+
+```
+This category has 526 records. Analysis will run about 132 batches,
+take roughly 5-6 minutes, and cost approximately $6.40.
+
+                                        [ Cancel ]  [ Run analysis ]
+```
+
+Below the threshold, nothing is shown — a 25-row demo category costs about $0.13
+and must not acquire a confirmation dialog it does not need.
+
+### Estimates are labelled, and reconciled
+
+The figures are estimates and say so. After the run, measured token usage is
+summed from the per-batch responses and logged alongside the estimate, so the
+seed density and the estimator can be corrected against reality instead of
+drifting. An estimate that is never checked against the bill is a guess with a
+dollar sign in front of it.
+
 ## Cost model
 
 Measured inputs: dense rows ~277 input tok/row and ~405 output tok/row; light
@@ -567,7 +871,9 @@ Building report…                       (aggregating)
 | aspect | behavior |
 | --- | --- |
 | Progress state | determinate `completed / total` once planning is done; indeterminate during calibration |
-| Cancel | a Cancel button beside the progress bar; editing the query also cancels. Aborts in-flight batches and returns to idle |
+| Pre-run confirmation | above `CONFIRM_ABOVE_USD`, an explicit dialog stating batch count, estimated runtime and estimated cost. Below it, nothing is shown |
+| Cancel | a Cancel button beside the progress bar; editing the query or starting a new run also cancels. Aborts in-flight batches **and clears the unscheduled queue** |
+| Leaving mid-run | `beforeunload` warns while a run is in flight, and only then — nothing is persisted, so a refresh loses the run |
 | Timeout messaging | names the stage reached and suggests a narrower selection; never implies partial results exist |
 | Partial-failure messaging | there are none — a failed batch fails the run, stated plainly |
 | Success | the existing `ResultsView`, unchanged |
@@ -584,9 +890,24 @@ Building report…                       (aggregating)
 // --- planning -------------------------------------------------------------
 interface BatchPlan {
   runId: string;
-  batches: Batch[];
   selectedRowCount: number;        // percentage denominator, fixed at plan time
-  measuredOutputTokPerRow: number; // from the calibration batch
+  /** Rows in selection order. Boundaries are decided as the run proceeds. */
+  rows: IncomingReview[];
+  estimate: RunEstimate;
+}
+
+/** Mutable sizing state, updated after every successful batch. */
+interface DensityState {
+  outputTokPerRow: number;         // EWMA, seeded at SEED_DENSITY
+  latencyMs: number;               // EWMA, drives proactive shrink
+  rowsPerBatch: number;            // current size for the NEXT dispatch
+}
+
+interface RunEstimate {
+  batches: number;
+  runtimeMs: number;
+  costUsd: number;                 // an estimate, labelled as such in the UI
+  requiresConfirmation: boolean;   // costUsd > CONFIRM_ABOVE_USD
 }
 
 interface Batch {
@@ -635,10 +956,14 @@ All external calls mocked; no test spends money.
 
 | area | tests |
 | --- | --- |
-| Deterministic chunking | same input ⇒ identical plan; every row in exactly one batch; row/byte caps respected; density change alters sizes predictably; 0 and 1-row edges |
+| Batch planning | every row in exactly one batch, selection order preserved; row/byte caps respected; 0 and 1-row edges |
+| Rolling sizing | EWMA tracks a density step-change; growth capped at 1.5×; latency over 18s shrinks *before* any failure; truncation/timeout halves and retries once; resize never touches dispatched batches |
+| Cost estimation | estimator matches hand-computed values; over-ceiling raises a controlled error naming the count; confirmation fires above threshold and not below; demo and local ceilings differ |
+| Hierarchical canonicalization | single pass under the bound; chunked above it; partition is sort-stable regardless of batch completion order; composed map is total, closed and shrinking; level cap exceeded ⇒ fail |
+| Orchestration semantics | superseded run's late results are dropped by runId; cancel clears the unscheduled queue; terminal failure aborts siblings; export gated on success |
 | Per-batch validation | unchanged grounding tests still pass; unknown review id, non-verbatim evidence, bad sentiment rejected |
 | Cross-batch dedup | same review, two raw labels folding to one canonical theme + same sentiment counts **once** |
-| Canonicalization | valid mapping applied correctly; rejects non-partition, out-of-range index, duplicate index, empty group, invented representative; scored against `bench/fixtures/clusters.json` |
+| Canonicalization validation | valid mapping applied correctly; rejects non-partition, out-of-range index, duplicate index, empty group, invented representative; scored against `bench/fixtures/clusters.json` |
 | Unique-row counting | numerator is distinct reviews, not tags |
 | Percentage math | denominator is full selection incl. rows that produced no tags; rounding |
 | Batch failure | one failed batch ⇒ whole run throws `AnalysisError`; **no** `AnalysisResult` constructed |
@@ -656,19 +981,58 @@ over to both routes.
 
 ## E. Implementation plan
 
-Small, independently reviewable PRs. Each leaves `main` green and shippable.
+Small, independently reviewable PRs. Each leaves the branch green and shippable.
 
-| PR | Scope | Risk |
-| --- | --- | --- |
-| **1. Batch planner** | `batchPlanner.ts` + types + tests. Pure functions only, wired to nothing. | none |
-| **2. Endpoint hardening + per-batch retarget** | `CLAUDE_ENABLED`, error taxonomy, structured logs, `api/analyze.test.ts`; lower row cap to 12. Ships the previously-approved hardening. | low |
-| **3. Batch execution** | orchestrator in `claudeEngine.ts`: calibration, fan-out, concurrency, retry, abort. Aggregation still single-theme-space. | medium |
-| **4. Canonicalization + aggregation** | `api/canonicalize.ts`, mapping validation, post-map dedup, unique-row counts, percentages, quote selection. | medium |
-| **5. Progress UI** | `AnalysisState` phases, progress + cancel in `AnalyzeForm`/`App`, privacy disclosure. | low |
-| **6. Report/export integration** | verify `copyReport` + `ResultsView` against multi-batch results; category-scale thresholds. | low |
-| **7. Quotas, observability, cleanup** | `MAX_ROWS_PER_ANALYSIS`, cost logging, runbook, README/SPEC updates, deployment verification. | low |
+**PR 0 — endpoint hardening. Shipped** (commits `6750554`, `77fee4e`):
+`CLAUDE_ENABLED` fail-closed, provider error taxonomy, structured cost logs,
+41 endpoint tests, privacy disclosure, bundle verification in CI. The row cap
+was deliberately left at 100 — it belongs with the batching work below, where
+its correct value is known.
 
-PR 2 is the already-approved hardening work and can land first and independently.
+| PR | Scope | Depends on | Risk |
+| --- | --- | --- | --- |
+| **1. Batch planner** | `batchPlanner.ts`: seeded density, EWMA update, latency-driven shrink, growth cap, byte/row bounds, coverage invariant. Pure functions, wired to nothing. | — | none |
+| **2. Cost estimator + ceilings** | `estimateRun()`, `MAX_ROWS_PER_ANALYSIS` per build target, `CONFIRM_ABOVE_USD`. Controlled over-ceiling error. Still no batching. | 1 | low |
+| **3. Per-batch endpoint retarget** | lower the server row cap to 12; update the client over-limit message to reference the run ceiling rather than the per-request cap. | 2 | low |
+| **4. Batch execution** | orchestrator in `claudeEngine.ts`: runId, fan-out at concurrency 6, rolling resize between batches, retry, abort, queue clearing, terminal-failure abort. Aggregation still single-theme-space. | 3 | **medium-high** |
+| **5. Canonicalization + aggregation** | `api/canonicalize.ts`, index-group output, single-pass and hierarchical paths, composition validation, post-map dedup, unique-row counts, percentages, quote selection. | 4 | **medium-high** |
+| **6. Progress + confirmation UI** | `AnalysisState` phases, determinate progress, Cancel, pre-run confirmation dialog, `beforeunload` guard while running. | 4 | low |
+| **7. Report/export integration** | copy/export gated on `success`; verify `copyReport` and `ResultsView` against multi-batch results; category-scale thresholds. | 5, 6 | low |
+| **8. Observability + docs** | estimate-vs-actual reconciliation logging, runbook, README/SPEC/ADR updates, deployment verification. | 7 | low |
+
+Two changes from the pre-revision sequence: the cost estimator moves **before**
+batch execution (PR 2), because the run ceiling and the confirmation gate should
+exist before anything can dispatch 132 requests; and the per-batch retarget is
+split out (PR 3) so the cap change and the orchestrator land separately and can
+be reverted independently.
+
+PRs 4 and 5 carry the real risk and should not be combined.
+
+### Acceptance gate — after PR 5/6, before PR 7
+
+Unit tests prove each stage in isolation. This gate proves they **compose**, on
+real runs rather than mocks, and must pass before export integration begins.
+
+Run a full category analysis twice — once over the complete 25-row synthetic demo
+category, once over at least one representative local category from the real
+Amazon dataset (large enough to force multiple batches and, ideally, hierarchical
+canonicalization) — and verify against the retained per-batch tags:
+
+| check | assertion |
+| --- | --- |
+| Coverage | the union of review ids across all batches equals the selected row set, exactly — no row missing, none duplicated |
+| Count integrity | **every displayed count equals the number of distinct validated review ids supporting that canonical theme and sentiment** — recomputed independently from the batch tags, not read from the aggregator |
+| Denominator | every percentage divides by the full selected row count, including rows that produced no tags |
+| Grounding | every displayed quote is a verbatim substring of the row it is attributed to |
+| Dedup | no review contributes twice to one canonical theme + sentiment |
+| Canonicalization | the composed map is total over the raw label set; every displayed label is one the model actually emitted |
+| All-or-nothing | with one batch forced to fail, no result is produced and export stays unavailable |
+
+The count-integrity check is the point of the gate: it is the one assertion that
+fails if batching, canonicalization and aggregation are each individually correct
+but wrong in combination — which is exactly the class of defect unit tests miss.
+
+Record the outcome in `bench/DECISION.md` alongside the model decision.
 
 ---
 
@@ -676,21 +1040,26 @@ PR 2 is the already-approved hardening work and can land first and independently
 
 **The smallest implementation that genuinely preserves category analysis:**
 
-1. Deterministic batch planner sized by **measured output density**, not row
-   count, with adaptive narrowing on truncation or timeout.
+1. Batch planner sized by **measured output density**, re-estimated after every
+   successful batch, shrinking proactively on a latency trend and reactively on
+   truncation or timeout.
 2. `/api/analyze` as a stateless per-batch tagger, capped at 12 rows, fail-closed
    behind `CLAUDE_ENABLED`.
 3. Client-orchestrated fan-out at concurrency 6, one retry per batch on transient
    failure, full `AbortSignal` cancellation.
 4. Validated tags held **in browser memory only** — no persistence.
-5. One label-only canonicalization pass (Option B) with index-group output and
-   exhaustive TypeScript validation of the mapping.
+5. Label-only canonicalization (Option B) with index-group output, bounded at
+   300 labels per request, hierarchical beyond that, with the composed mapping
+   validated as total, closed, shrinking and acyclic.
 6. Deterministic aggregation: dedup on the canonical key, unique-row counts,
    percentages over the full selection, deterministic ordering and quote choice.
 7. TypeScript-authored summary. No Claude narrative.
 8. All-or-nothing: any batch or canonicalization failure fails the run. No partial
    reports, no heuristic fallback.
-9. Progress + cancel UI; `AnalysisResult` contract unchanged.
+9. Pre-run cost and runtime estimate, with confirmation above a threshold and a
+   hard run ceiling that differs between the protected demo and local use.
+10. Progress, cancel, `beforeunload` guard, runId-scoped result acceptance, and
+    export gated on complete success; `AnalysisResult` contract unchanged.
 
 Explicitly **not** in the MVP: durable job store, resume after refresh, server-side
 orchestration, embeddings, theme catalog, Claude narrative, cross-run caching.
