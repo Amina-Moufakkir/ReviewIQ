@@ -34,3 +34,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # Source hygiene is asserted by unit tests; this asserts the ARTIFACT.
+      # A VITE_-prefixed secret is inlined at build time and would appear only
+      # here, so the check has to run against dist/ after the build.
+      - name: Verify no secrets in the client bundle
+        run: npm run verify:bundle

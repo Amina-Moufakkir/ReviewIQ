@@ -103,3 +103,20 @@ describe("journey — Claude engine", () => {
     expect(text).toMatch(/averaged rating above is shown as context only/i);
   });
 });
+
+describe("privacy disclosure — Claude engine", () => {
+  it("tells the analyst their review text is sent to Anthropic, before they run anything", async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText(/sent to Anthropic for analysis/i)).toBeTruthy();
+    });
+    expect(screen.getByText(/does not\s+permanently store/i)).toBeTruthy();
+  });
+
+  it("does not claim the analysis is deterministic or browser-only on this path", async () => {
+    render(<App />);
+    await waitFor(() => screen.getByText(/sent to Anthropic for analysis/i));
+    expect(screen.queryByText(/deterministic keyword analysis/i)).toBeNull();
+    expect(screen.queryByText(/no review text leaves this page/i)).toBeNull();
+  });
+})

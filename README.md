@@ -7,7 +7,10 @@ Built by Amina Moufakkir as a project for the
 
 **Live demo (GitHub Pages, heuristic) → https://amina-moufakkir.github.io/ReviewIQ/**
 
-**Vercel (heuristic-only; `/api/analyze` deployed but intentionally keyless) → https://reviewiq-six.vercel.app/**
+**Vercel (public, heuristic-only; `/api/analyze` deployed but disabled and keyless) → https://reviewiq-six.vercel.app/**
+
+> The Claude engine runs on a **separate, access-controlled preview deployment**, not on the
+> public URL above. See [Claude engine & Vercel deployment](#claude-engine--vercel-deployment).
 
 > The public demo uses a small **synthetic Amazon-style dataset**, so the full
 > integration can be explored without redistributing the original data. Local
@@ -293,7 +296,7 @@ reviewer PII, which keep it out of deployments regardless of engine; and an
 `/api/analyze` that has no authentication and would be publicly reachable through
 the production alias. `ANTHROPIC_API_KEY` is therefore set in **no** Vercel
 environment, and the deployed endpoint answers `500 server_misconfigured` by
-design — see [Secret configuration](#secret-configuration-local-only).
+design — see [Environment variables](#environment-variables).
 
 Read an empty Vercel environment as the decision working, not as something to
 repair.
@@ -460,7 +463,7 @@ that function — it is never bundled into the browser and never prefixed `VITE_
 By decision, the key is set in **no Vercel environment**; it lives only in a
 local `.env.local` for `vercel dev`, so the deployed `/api/analyze` answers a
 controlled `500 server_misconfigured` rather than running. See
-[Secret configuration (local only)](#secret-configuration-local-only) and
+[Environment variables](#environment-variables) and
 [Where this is verified, and where it is not](#which-engine-for-which-data) for
 why the live endpoint is intentionally keyless. The browser sends the filtered
 reviews to `/api/analyze` and receives back validated tags or a controlled error.
@@ -477,7 +480,7 @@ Set `VITE_ANALYSIS_ENGINE` in the environment:
 > **Note:** the `claude` row describes where the engine runs *when enabled*. In
 > this project it is enabled **only in local `vercel dev`** — never on the live
 > Vercel deployment, which ships heuristic-only with no key. See
-> [How the two deployments coexist](#how-the-two-deployments-coexist).
+> [How the deployments coexist](#how-the-deployments-coexist).
 
 `VITE_ANALYSIS_ENGINE` carries only the engine name — it is **not** a secret and
 contains no key. When Claude mode is selected and the call fails, the app
@@ -794,137 +797,237 @@ complaint spike in a specific date range.
 ## Claude engine & Vercel deployment
 
 The optional **Claude engine** uses the Claude API as a *semantic tagging layer*
-(not a report generator). For the filtered reviews (selected product, plus the
-date range when the data has one) it identifies specific themes from the
-language, clusters equivalent
-descriptions under one canonical label, and assigns sentiment per theme mention
-with the exact supporting text span. **All counts, percentages, thresholds, and
-the summary are still computed in TypeScript** — the model judges language, code
-computes evidence. **The star rating is never sent to the model**, so it cannot
-influence sentiment at all: the request carries `id` and `text` only. That is a
-structural guarantee, not an instruction the prompt asks the model to respect.
+(not a report generator). For the filtered reviews it identifies specific themes
+from the language, clusters equivalent descriptions under one canonical label,
+and assigns sentiment per theme mention with the exact supporting text span.
+**All counts, percentages, thresholds, and the summary are still computed in
+TypeScript** — the model judges language, code computes evidence. **The star
+rating is never sent to the model**, so it cannot influence sentiment at all: the
+request carries `id` and `text` only. That is a structural guarantee, not an
+instruction the prompt asks the model to respect.
 
-### Architecture (same-origin, key stays server-side)
+### The two deployments
 
-- **Server function:** [`api/analyze.ts`](api/analyze.ts) is a Vercel serverless
-  function. The browser calls it at the relative, same-origin path
-  **`/api/analyze`** (so there is no CORS to configure). It receives the filtered
-  reviews, calls Claude, validates the response, and returns **only** the
-  validated tag payload or a controlled error — never raw provider output.
-- **Client engine:** [`src/services/claudeEngine.ts`](src/services/claudeEngine.ts)
-  posts to `/api/analyze` and **defensively re-validates** the response before
-  building an `AnalysisResult` (two gates: server and client).
-- The **`ANTHROPIC_API_KEY` never reaches the browser.** It is read only via
-  `process.env` inside the function, is never prefixed `VITE_`, and is never
-  committed. A Claude failure surfaces through the normal error UI and **never**
-  silently falls back to the heuristic engine.
-- **Limits (server-enforced):** at most **100 reviews** and ~**250 KB** request
-  body per request, plus a post-parse review-text budget; over-limit returns a
-  controlled `413` (never truncated). Model default is `claude-opus-4-8`
-  (override with `ANTHROPIC_MODEL`); the Claude call has a ~30s timeout.
+They are separate on purpose. The public demo must stay open; the paid endpoint
+must not.
+
+| | Public production | Protected Claude demo |
+| --- | --- | --- |
+| Vercel target | `production`, branch `main` | `preview`, branch `claude-demo` |
+| URL | https://reviewiq-six.vercel.app/ | `reviewiq-git-claude-demo-<scope>.vercel.app` |
+| Anonymous access | open, by design | blocked at the edge (401) |
+| Engine | heuristic | Claude |
+| Data | synthetic `amazon-demo.csv` | synthetic `amazon-demo.csv` |
+| Anthropic key | **none, ever** | dedicated demo key |
+
+**Why a separate deployment rather than protecting production.** On this account
+(Hobby), Vercel's Standard Protection is `all_except_custom_domains`, and the
+production `.vercel.app` alias counts as a custom domain. Verified directly:
+
+| URL | `GET /` | `POST /api/analyze` |
+| --- | --- | --- |
+| production alias | 200 | reaches the function |
+| generated deployment URL | 302 → SSO | **401** |
+
+So production cannot be protected on this plan — and should not be even where it
+can, because putting the public heuristic demo behind a login would hide the
+portfolio's front door. The split is the right design regardless of plan.
+
+### Environment variables
+
+Scoping is the mechanism that keeps the two deployments apart. Nothing
+Claude-related is ever set on the production target.
+
+| Variable | Production | Preview / `claude-demo` | Notes |
+| --- | --- | --- | --- |
+| `ANTHROPIC_API_KEY` | **unset** | set, Sensitive | demo-only key |
+| `ANTHROPIC_MODEL` | unset | set | falls back to the in-code default |
+| `CLAUDE_ENABLED` | **unset → disabled** | `true` | only the exact string `true` enables |
+| `LOG_SALT` | unset | set | omitted ⇒ no caller hash logged |
+| `VITE_ANALYSIS_ENGINE` | unset → heuristic | `claude` | build-time; an engine name, not a secret |
+
+Two properties this buys:
+
+- **No production build ever carries a key**, so a rollback can only ever reach a
+  keyless build. That retires the rollback risk this section used to document.
+- **`vercel --prod` from the `claude-demo` branch is safe**: it would ship Claude
+  *code* to production, but with no key and `CLAUDE_ENABLED` unset it answers
+  `analysis_disabled`. Fail-closed by construction, not by discipline.
+
+**Use two separate keys** — one in your local `.env.local`, one in Vercel. Never
+the same value. Either can then be rotated without disturbing the other, and a
+leak from either is contained. Copy [`.env.example`](.env.example); it lists
+names only.
+
+### Kill switch
+
+`CLAUDE_ENABLED` is checked on every request, before the body is examined and
+before anything provider-related runs. Only the exact string `true` enables
+Claude; missing, empty, or misspelled all mean **disabled**, because every way of
+getting the variable wrong should land on "off" rather than "spending".
+
+**It requires a redeploy to take effect.** A running function keeps the
+environment it was deployed with, so `vercel env add`/`rm` alone changes nothing
+until you redeploy. It is a one-variable off switch that needs no key rotation —
+not an instant one.
+
+Disabled and misconfigured are deliberately different responses:
+`analysis_disabled` (503) is a decision, `server_misconfigured` (500) is a
+mistake, and an operator reading logs needs to tell them apart.
+
+### Errors and logs
+
+Every failure returns `{ error: { code, message } }`. The browser never receives
+a provider error body, a stack, or any hint about key state.
+
+| Condition | Status | Code |
+| --- | --- | --- |
+| Kill switch off | 503 | `analysis_disabled` |
+| Enabled but no key / provider auth / unknown model | 500 | `server_misconfigured` |
+| Provider rate limit | 429 | `analysis_busy` |
+| Provider 5xx, overload, network, billing exhaustion | 502 | `provider_unavailable` |
+| Refusal, truncation, unreadable or all-rejected output | 502 | `analysis_failed` |
+| Claude call exceeded 30s | 504 | `analysis_timeout` |
+| Bad request / too many reviews / oversized body | 400, 413 | `invalid_request`, `too_many_reviews`, `payload_too_large` |
+
+Billing exhaustion is reported to the caller as unavailability and recorded in
+the log as `providerNote: "billing"` — a 403 can also be a permissions problem,
+so nothing user-facing claims to know why.
+
+One sanitized JSON line per request carries `requestId`, `ts`, `caller` (hashed),
+`reviewCount`, `inputTextBytes`, `model`, `status`, `code`, `ms`, `stopReason`,
+`accepted`/`rejected`/`deduped`, and token usage. That is enough to estimate
+spend from logs alone. It carries **no review text, no evidence spans, no prompt,
+no provider output, and no key material**, and `api/analyze.test.ts` asserts that
+the field set cannot grow to include one.
+
+`caller` is `SHA-256(LOG_SALT + first x-forwarded-for hop)`, truncated. Without
+`LOG_SALT` the field is omitted rather than downgraded: an unsalted hash of an IP
+address is reversible by enumeration, so it would be personal data in disguise.
+
+**It is operational correlation only.** It exists so a usage spike can be
+attributed to one source rather than to traffic in general. It is **not**
+authentication, **not** authorization, and **not** a durable identity: access
+control is Vercel's deployment protection at the edge, and the value is derived
+from a client-influenced header, changes with the caller's network, and changes
+for everyone when `LOG_SALT` is rotated. Nothing is granted, denied, or metered
+on it — there is deliberately no per-caller quota, and using this as one would be
+trivially evaded.
 
 ### Local development (`vercel dev`)
 
-`npm run dev` (plain Vite) does **not** serve `/api` and does not load the Vercel
-environment — use it only for the heuristic engine. For anything touching the
-Claude engine, use the Vercel CLI's linked-project workflow:
+`npm run dev` (plain Vite) does **not** serve `/api`. For the Claude engine:
 
 ```bash
-npm i -g vercel          # once
-vercel link              # link this dir to the Vercel project (creates .vercel/, gitignored)
-vercel dev               # runs the frontend + /api together, loads Dev env vars
-```
-
-To exercise the Claude engine locally, run with `VITE_ANALYSIS_ENGINE=claude`.
-
-**Where the key must live for `vercel dev`:** in your shell, exported from
-`.env.local` — not in any Vercel environment, including Development. A local
-`.env.local` feeds the **frontend/build** but is **not** injected into the
-function runtime, so the function returns the controlled
-`500 server_misconfigured` unless you export it first. See
-[Secret configuration](#secret-configuration-local-only) for the exact command.
-
-### Secret configuration (local only)
-
-`ANTHROPIC_API_KEY` lives in your local `.env.local` and **nowhere on Vercel**.
-Copy [`.env.example`](.env.example) — it lists only `ANTHROPIC_API_KEY=`, and
-local `.env*` files are gitignored. `vercel dev` does not reliably pick the key
-up from `.env.local` on its own; export it into the process instead:
-
-```bash
+npm i -g vercel
+vercel link
 set -a && . ./.env.local && set +a
-VITE_ANALYSIS_ENGINE=claude ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" vercel dev
+VITE_ANALYSIS_ENGINE=claude CLAUDE_ENABLED=true ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" vercel dev
 ```
 
-Do **not** add the key to any Vercel environment. The deployment is intended to
-run heuristic-only, and a configured `/api/analyze` on the production alias would
-be an unauthenticated, unrated-limited endpoint that anyone could spend the key
-through.
+`.env.local` feeds the frontend build but is **not** injected into the function
+runtime, so the key and the kill switch must be exported into the process.
+Without `CLAUDE_ENABLED=true` the endpoint correctly answers `analysis_disabled`.
 
-Two things to know if that decision is ever revisited:
+### Deployment runbook
 
-- **Removing an env var does not take effect until you redeploy.** A running
-  function keeps the environment it was deployed with, so `vercel env rm` alone
-  leaves the old build fully functional on the live alias.
-- **Past deployments keep their own copy of the secret.** Direct `dpl_` URLs sit
-  behind Vercel Authentication (`401`), but a rollback to a keyed build would
-  repoint the public alias at it and re-expose the endpoint. Deployments built
-  while the key was set have been deleted for that reason.
+1. **Create a new Anthropic key** dedicated to the demo. Do not reuse the local one.
+2. `git checkout -b claude-demo && git push -u origin claude-demo`
+3. Add the variables, scoped to Preview **and that branch only**:
+   ```bash
+   vercel env add ANTHROPIC_API_KEY preview claude-demo    # mark Sensitive
+   vercel env add ANTHROPIC_MODEL preview claude-demo
+   vercel env add CLAUDE_ENABLED preview claude-demo       # value: true
+   vercel env add LOG_SALT preview claude-demo
+   vercel env add VITE_ANALYSIS_ENGINE preview claude-demo # value: claude
+   ```
+4. **Confirm production has none of them**: `vercel env ls` — no row may show a
+   Production target for any Claude variable.
+5. Confirm Deployment Protection is on (Standard Protection is the default and
+   covers preview/generated URLs).
+6. Redeploy the branch. Environment changes do not reach a running function
+   until it is rebuilt.
+7. Run the verification checklist below.
 
-### Deploy to Vercel
+### Verification checklist
 
-Vercel auto-detects Vite (build `npm run build`, output `dist/`) and auto-deploys
-any function under `api/`. Push the branch (or `vercel --prod`) and Vercel builds
-the frontend and the function together on the same origin. On Vercel the app is
-served at the domain root — `vite.config.ts` sets `base` to `/` automatically
-when `VERCEL` is set (and to `/ReviewIQ/` otherwise for GitHub Pages).
+Anonymous — no cookies, no token:
 
-### Cost / free-tier notes
+```bash
+PROD=reviewiq-six.vercel.app
+DEMO=reviewiq-git-claude-demo-<scope>.vercel.app
 
-Every Claude analysis is one API call over the filtered reviews; input+output
-scale with review count (bounded by the 100-review cap). At the default
-`claude-opus-4-8`, a large (~100-review) request is roughly on the order of a few
-US cents; set `ANTHROPIC_MODEL=claude-haiku-4-5` to cut that substantially. On
-Vercel's **Hobby** (free) tier, serverless functions are subject to
-execution-time and monthly-invocation limits — fine for a demo, but the Claude
-API itself is billed to your Anthropic account regardless of tier.
+curl -s -o /dev/null -w "%{http_code}\n" https://$PROD/                      # 200
+curl -s -X POST -H 'content-type: application/json' \
+  -d '{"reviews":[{"id":"r1","text":"hi"}]}' https://$PROD/api/analyze       # analysis_disabled
 
-### Model choice (provisional — benchmark deferred)
+curl -s -o /dev/null -w "%{http_code}\n" https://$DEMO/                      # 401/302
+curl -s -o /dev/null -w "%{http_code}\n" -X POST -H 'content-type: application/json' \
+  -d '{"reviews":[{"id":"r1","text":"hi"}]}' https://$DEMO/api/analyze       # 401
 
-The default model is **`claude-opus-4-8`**, overridable per deployment with the
-`ANTHROPIC_MODEL` env var. This is a **deliberate but provisional MVP decision**,
-not a benchmarked one:
+vercel ls reviewiq          # no deployment URL may serve Claude anonymously
+npm run build && npm run verify:bundle   # no key or SDK in the shipped bundle
+```
 
-- **Why Opus for now:** it was verified working end-to-end — clean canonical
-  theme clustering, correct per-mention sentiment on high-star reviews with real
-  complaints, and exact evidence spans. For an MVP the bar is "does it work,"
-  which Opus clears.
-- **Why it's low-risk to defer optimizing:** the Claude engine runs only in local
-  development by decision, so the default model costs nothing in production
-  today, and it is a one-line `ANTHROPIC_MODEL` override whenever that changes.
-  **`claude-haiku-4-5`** and **`claude-sonnet-5`** are the obvious cost/latency
-  candidates.
-- **When to revisit:** only if the Claude engine ever carries real traffic, which
-  the current decision rules out. At that point, benchmark a
-  fixed evaluation set across Haiku / Sonnet / Opus and judge on **canonical
-  theme consistency, mixed-sentiment accuracy, evidence-span validity, latency,
-  and cost** (evidence-span validity is scored deterministically by the existing
-  `validateTags`). That turns the default from an assumption into a measured
-  decision against a representative workload — which a small demo eval set can't
-  yet stand in for.
+Then, signed in: run one analysis on the demo, confirm the report renders; set
+`CLAUDE_ENABLED=false`, redeploy, confirm `analysis_disabled`; set it back.
 
-### How the two deployments coexist
+### External access on Hobby
 
-- **GitHub Pages** — the existing deploy, **heuristic-only** demo. It never sets
-  `VITE_ANALYSIS_ENGINE`, so it ships the heuristic engine and never calls
-  `/api/analyze`. Unaffected by any of the above.
-- **Vercel** — https://reviewiq-six.vercel.app/ — the frontend and the `/api/analyze`
-  function on one origin. The engine is env-controlled, and by decision neither
-  variable is set there: the deployment ships the **heuristic engine** over the
-  synthetic demo records, the Claude path is tree-shaken out of the bundle, and
-  the function — still deployed, since anything under `api/` is — answers
-  `500 server_misconfigured` because it has no key. Verified after each deploy.
-- **Local `vercel dev`** — the only place the Claude engine runs, over the real
+**Hobby is single-member** — Vercel Authentication admits you and nobody else,
+and there is no teammate to invite. So:
+
+- **Default: do not share access.** Demo the Claude engine in a recorded
+  walkthrough or a live screen-share you drive. This costs nothing and is the
+  recommended path.
+- **Temporary access only, if genuinely needed:** generate a Protection Bypass
+  secret, share it 1:1 with a stated expiry, then **rotate it and set
+  `CLAUDE_ENABLED=false` when the window closes**. The secret is a bearer
+  credential for the whole deployment, `/api/analyze` included — sharing it
+  grants Claude spend, it cannot be scoped to a path, and it cannot be revoked
+  for one recipient.
+- **Never publish it** in a README, résumé, application, or public link.
+
+### Cost, limits, and the current scale ceiling
+
+Per-request controls: fixed model from server config, fixed `max_tokens`,
+`maxRetries: 0`, 30s timeout, ≤100 reviews, ≤250 KB body, ≤200 KB review text.
+The Anthropic account's **$20 spending limit is the final backstop, not the
+control** — it cannot tell a legitimate run from a loop, which is why the kill
+switch and the per-request caps sit in front of it.
+
+**Known limitation — category-scale analysis.** Benchmarking
+([`bench/DECISION.md`](bench/DECISION.md)) showed the single-request design does
+not reach category scale: throughput is ~110 output tok/s, a 30s window admits
+~3,300 output tokens, and a 526-row category needs ~212,000 — more than the
+model's own 128k output ceiling. Measured: 5 rows pass, 10 and 20 rows time out,
+and the full 25-row synthetic demo category times out. The fix is batching, not a
+longer timeout or a different model; the design is in
+[`docs/adr/0001-category-scale-claude-analysis.md`](docs/adr/0001-category-scale-claude-analysis.md)
+and is **not yet implemented**. Until it is, the Claude engine is reliable only
+on small selections, and larger ones surface a controlled timeout rather than a
+wrong answer.
+
+### Model choice
+
+Default **`claude-opus-4-8`**, overridable per deployment with `ANTHROPIC_MODEL`.
+Chosen by measurement, not price — see [`bench/DECISION.md`](bench/DECISION.md).
+Against `claude-haiku-4-5`, evidence-span validity tied at 100%, mixed-sentiment
+recall was near-tied (63% vs 58%), and Opus won semantic clustering (100% vs 88%
+true-merge, exactly 4 themes against a ground truth of 4) and run-to-run theme
+stability (79–100% vs 23–28%). Stability is what a viewer notices: at 23% overlap
+the same input yields largely different themes on each click.
+
+### How the deployments coexist
+
+- **GitHub Pages** — heuristic-only demo. Never sets `VITE_ANALYSIS_ENGINE`, so
+  it ships the heuristic engine and never calls `/api/analyze`.
+- **Vercel production** — heuristic engine over the synthetic dataset, the Claude
+  path tree-shaken out of the bundle, and the function answering
+  `analysis_disabled` because `CLAUDE_ENABLED` is unset there.
+- **Vercel `claude-demo` preview** — the Claude engine, behind Vercel
+  Authentication, with the demo key.
+- **Local `vercel dev`** — the only place the Claude engine runs over the real
   dataset, with the key from `.env.local`.
 
 ## Tech
@@ -939,7 +1042,12 @@ npm run typecheck       # tsc
 npm run lint            # eslint
 npm test                # vitest (engines, CSV parsing, Amazon adapter, product labels, query-bound state)
 npm run build           # production build
+npm run verify:bundle   # fail if the built client bundle contains a key or the Anthropic SDK
 npm run build:amazon    # regenerate public/amazon-products.csv from src/amazon.csv
+
+# Local only, spends money, never run in CI. See bench/DECISION.md.
+node scripts/bench-models.ts            # dry run: real token counts, no generation
+node scripts/bench-models.ts --confirm  # execute, under a provable spend ceiling
 ```
 
 ## Status

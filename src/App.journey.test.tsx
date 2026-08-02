@@ -199,3 +199,13 @@ describe("journey — the honesty guarantees survive the wiring", () => {
     expect(text).not.toMatch(/No actions recommended/i);
   });
 });
+
+describe("privacy disclosure — heuristic engine", () => {
+  it("says the analysis runs in the browser and names no provider", async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText(/run entirely in your browser/i)).toBeTruthy();
+    });
+    expect(screen.queryByText(/sent to Anthropic/i)).toBeNull();
+  });
+})
