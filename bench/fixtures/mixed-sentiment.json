@@ -1,0 +1,82 @@
+{
+  "name": "mixed-sentiment",
+  "description": "Reviews that praise one theme and fault another in the same body. This is the capability the Claude engine exists for (SPEC.md: 'one review can yield praise for one theme and a fault for another') and the one the rating-based heuristic engine structurally cannot represent. Scoring is label-agnostic: it never asks the model to guess a theme name, only whether it split polarity across distinct themes and anchored each side in the right clause. `praiseClause` and `faultClause` are exact, non-overlapping substrings of `text`.",
+  "reviews": [
+    {
+      "id": "mx1",
+      "text": "The sound is genuinely excellent for the price, but the battery dies after about three hours.",
+      "kind": "mixed",
+      "praiseClause": "The sound is genuinely excellent for the price",
+      "faultClause": "the battery dies after about three hours"
+    },
+    {
+      "id": "mx2",
+      "text": "Battery easily lasts me two full days, though the ear cushions started peeling within a month.",
+      "kind": "mixed",
+      "praiseClause": "Battery easily lasts me two full days",
+      "faultClause": "the ear cushions started peeling within a month"
+    },
+    {
+      "id": "mx3",
+      "text": "Setup took me all of thirty seconds and pairing is effortless. Shame the case hinge feels like it will snap.",
+      "kind": "mixed",
+      "praiseClause": "pairing is effortless",
+      "faultClause": "the case hinge feels like it will snap"
+    },
+    {
+      "id": "mx4",
+      "text": "Comfortable enough to wear on a long flight, but the noise cancelling barely does anything.",
+      "kind": "mixed",
+      "praiseClause": "Comfortable enough to wear on a long flight",
+      "faultClause": "the noise cancelling barely does anything"
+    },
+    {
+      "id": "mx5",
+      "text": "Build quality is superb, solid metal throughout, yet the companion app crashes every single time I open it.",
+      "kind": "mixed",
+      "praiseClause": "Build quality is superb, solid metal throughout",
+      "faultClause": "the companion app crashes every single time I open it"
+    },
+    {
+      "id": "mx6",
+      "text": "Charges incredibly fast, full in under an hour. The microphone, however, makes me sound like I am in a tunnel.",
+      "kind": "mixed",
+      "praiseClause": "Charges incredibly fast, full in under an hour",
+      "faultClause": "makes me sound like I am in a tunnel"
+    },
+    {
+      "id": "mx7",
+      "text": "The bass is rich and warm and I love it, but these are far too tight around my head.",
+      "kind": "mixed",
+      "praiseClause": "The bass is rich and warm and I love it",
+      "faultClause": "far too tight around my head"
+    },
+    {
+      "id": "mx8",
+      "text": "Arrived well packaged and the fabric feels premium, although the volume buttons are unresponsive half the time.",
+      "kind": "mixed",
+      "praiseClause": "the fabric feels premium",
+      "faultClause": "the volume buttons are unresponsive half the time"
+    },
+    {
+      "id": "mx9",
+      "text": "Absolutely delighted with these. The sound is clear, they are comfortable, and the battery goes on forever.",
+      "kind": "praise-only"
+    },
+    {
+      "id": "mx10",
+      "text": "Excellent value. Solid build, quick pairing, and the case is compact enough for a pocket.",
+      "kind": "praise-only"
+    },
+    {
+      "id": "mx11",
+      "text": "Disappointing. The audio is muddy, the fit is uncomfortable, and it stopped charging after two weeks.",
+      "kind": "fault-only"
+    },
+    {
+      "id": "mx12",
+      "text": "Poor build, the plastic creaks, the app never connects, and the sound is thin and lifeless.",
+      "kind": "fault-only"
+    }
+  ]
+}

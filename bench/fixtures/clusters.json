@@ -1,0 +1,31 @@
+{
+  "name": "clusters",
+  "description": "Four concepts, four paraphrases each, deliberately worded so no two paraphrases of the same concept share vocabulary. This is what the prompt asks for by name ('died after a week', 'won't hold a charge' and \"battery's useless\" all map to one battery-life theme) and what the heuristic engine's keyword matcher cannot do. Two clusters are fault-toned and two praise-toned so clustering is measured under both polarities. Each review mentions exactly one concept, so same-cluster and cross-cluster pairs are unambiguous.",
+  "clusters": {
+    "battery": "battery life / charge retention",
+    "durability": "physical build holding up over time",
+    "sound": "audio quality",
+    "comfort": "physical comfort and fit"
+  },
+  "reviews": [
+    { "id": "cl1", "cluster": "battery", "text": "It died after a week and never powered on again." },
+    { "id": "cl2", "cluster": "battery", "text": "Simply will not hold a charge for more than an hour." },
+    { "id": "cl3", "cluster": "battery", "text": "Have to plug it in twice a day, which defeats the point." },
+    { "id": "cl4", "cluster": "battery", "text": "Runs flat unbelievably quickly compared to my old pair." },
+
+    { "id": "cl5", "cluster": "durability", "text": "Cracked right across the housing within a month of light use." },
+    { "id": "cl6", "cluster": "durability", "text": "The whole thing feels flimsy, like it would give way if you sat on it." },
+    { "id": "cl7", "cluster": "durability", "text": "The hinge snapped clean off while I was putting it away." },
+    { "id": "cl8", "cluster": "durability", "text": "Fell apart at the seam after barely any handling at all." },
+
+    { "id": "cl9", "cluster": "sound", "text": "The highs are crisp and every instrument sits exactly where it should." },
+    { "id": "cl10", "cluster": "sound", "text": "Bass is rich without ever drowning out the vocals." },
+    { "id": "cl11", "cluster": "sound", "text": "Audio reproduction is superb, easily the best I have owned." },
+    { "id": "cl12", "cluster": "sound", "text": "Everything comes through clean and detailed, even at low volume." },
+
+    { "id": "cl13", "cluster": "comfort", "text": "Wonderfully comfortable, I forget I am wearing them." },
+    { "id": "cl14", "cluster": "comfort", "text": "The cushions are soft enough for an eight hour shift." },
+    { "id": "cl15", "cluster": "comfort", "text": "Fits my head perfectly with no pressure anywhere." },
+    { "id": "cl16", "cluster": "comfort", "text": "Can keep these on all day without any ache at all." }
+  ]
+}
