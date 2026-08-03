@@ -1010,6 +1010,47 @@ npm run build && npm run verify:bundle   # no key or SDK in the shipped bundle
 Then, signed in: run one analysis on the demo, confirm the report renders; set
 `CLAUDE_ENABLED=false`, redeploy, confirm `analysis_disabled`; set it back.
 
+### Verification record — 2026-08-03
+
+Run against Git-triggered deployments of `f5fbf8c`, anonymously except where noted.
+
+| # | check | result |
+| --- | --- | --- |
+| 1 | Public production `GET /` | **200** — open |
+| 2 | Public production `POST /api/analyze` | **503** `analysis_disabled` |
+| 3 | Protected preview `GET /`, anonymous | **302** → Vercel SSO |
+| 3 | Protected preview `POST /api/analyze`, anonymous | **401** — blocked at the edge, function never runs |
+| 4 | Protected preview, signed in | Claude analysis completed end to end |
+
+Supporting evidence:
+
+- **Environment scoping.** `vercel env ls` shows all five Claude variables as
+  `Preview (claude-demo)`. **No Claude variable has a Production target.**
+- **Production cannot call the endpoint at all.** The deployed production bundle
+  contains no `/api/analyze` string and none of the Claude engine's error
+  messages — the path is compiled out, not merely disabled by an unset variable.
+  No key or SDK literal is present either.
+- **The preview runs the Claude engine.** The page shows the Anthropic
+  disclosure rather than the browser-only one, and the footer reads
+  `CLAUDE, TEXT-BASED SENTIMENT`.
+- **Mixed sentiment on a 5.0-star record.** The demo run returned three praise
+  themes and one fault (`temperature control precision`) from a single record
+  rated 5.0★. That is the case the rating-based heuristic engine structurally
+  cannot represent, so it is the clearest end-to-end proof that the Claude path
+  is live and doing what SPEC.md claims.
+- **Structured logs land as designed**, with the caller hash truncated here:
+
+  ```json
+  { "at": "api/analyze", "ts": "2026-08-03T00:48:36.860Z",
+    "requestId": "b38dbb10-…", "caller": "0333…", "status": 200, "code": "ok",
+    "ms": 3259, "reviewCount": 1, "inputTextBytes": 157,
+    "model": "claude-opus-4-8", "stopReason": "end_turn",
+    "accepted": 4, "rejected": 0, "deduped": 0,
+    "inputTokens": 585, "outputTokens": 209 }
+  ```
+
+  No review text, no evidence spans, no key material. That request cost $0.008.
+
 ### External access on Hobby
 
 **Hobby is single-member** — Vercel Authentication admits you and nobody else,
