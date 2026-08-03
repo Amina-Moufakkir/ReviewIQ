@@ -1,20 +1,33 @@
 import { describe, it, expect } from "vitest";
-import {
-  estimateOutputTokens,
-  withinEstimatedSyncBudget,
-  MAX_ROWS_PER_BATCH_REQUEST,
-  SYNC_OUTPUT_TOKEN_BUDGET,
-} from "./claudeTags";
+import { estimateOutputTokens, MAX_ROWS_PER_BATCH_REQUEST } from "./claudeTags";
 import { maxRowsPerAnalysis } from "./runEstimator";
 import { DEFAULT_PLANNER_CONFIG } from "./batchPlanner";
 
 /**
- * The synchronous budget is the app's answer to a measured limit, so it is
- * tested against the measurements themselves rather than against its own
- * arithmetic. Every case below is a real run recorded in bench/DECISION.md on
- * 2026-08-02; if the estimator or the budget is retuned so that it would have
- * mispredicted any of them, these fail.
+ * Historical regression evidence: the measurements that made batching necessary.
+ *
+ * These runs were real, against the real endpoint, on 2026-08-02
+ * (bench/DECISION.md). They are the reason ReviewIQ does not send a category as
+ * one request: five dense rows completed in ~19s, while ten dense rows, twenty
+ * dense rows, and the ENTIRE 25-row synthetic demo category all hit the 30s wall
+ * — the last of those at only 2,814 bytes of text.
+ *
+ * The gate they once fed (`withinEstimatedSyncBudget`) is gone: the pipeline
+ * splits a selection into batches, so "does this fit in one request" no longer
+ * decides anything an analyst sees. What survives is the estimator, which still
+ * seeds the planner's density before any batch has been measured and still
+ * projects cost and runtime before a run starts.
+ *
+ * So these assert the estimator against the observations directly, rather than
+ * against its own arithmetic. If it is ever retuned such that it would have
+ * mispredicted one of these runs, that is a regression against measured
+ * reality, and it fails here.
  */
+
+/** ~110 output tok/s sustained x a 30s provider timeout. */
+const THIRTY_SECOND_OUTPUT_CEILING = 3300;
+
+/** Every run recorded on 2026-08-02, with what actually happened. */
 const MEASURED = [
   { label: "5 dense Amazon rows", rows: 5, bytes: 4851, completed: true },
   { label: "10 dense Amazon rows", rows: 10, bytes: 12129, completed: false },
@@ -23,50 +36,67 @@ const MEASURED = [
   { label: "25 light synthetic rows", rows: 25, bytes: 2814, completed: false },
 ] as const;
 
-describe("synchronous budget — checked against measured runs", () => {
-  it.each(MEASURED)("predicts $label ($completed)", ({ rows, bytes, completed }) => {
-    expect(withinEstimatedSyncBudget(rows, bytes)).toBe(completed);
-  });
+describe("the estimator still agrees with every run that was measured", () => {
+  it.each(MEASURED)(
+    "puts $label on the correct side of the 30s wall (completed: $completed)",
+    ({ rows, bytes, completed }) => {
+      const estimated = estimateOutputTokens(rows, bytes);
+      expect(estimated < THIRTY_SECOND_OUTPUT_CEILING).toBe(completed);
+    },
+  );
 
-  // The 25-row synthetic run timed out having streamed ~8,000 characters,
-  // roughly 3,400 output tokens. The estimator puts it at 3,372 — the single
-  // closest check available that it models output volume rather than input size.
   it("estimates the timed-out synthetic run within 5% of its observed output", () => {
+    // That run streamed ~8,000 characters before the wall, roughly 3,400 output
+    // tokens. This is the single closest check available that the estimator
+    // models output VOLUME rather than input size.
     const estimate = estimateOutputTokens(25, 2814);
     expect(Math.abs(estimate - 3400) / 3400).toBeLessThan(0.05);
   });
 
-  it("is driven by output volume, not byte size", () => {
-    // 25 light rows are a tenth the bytes of 5 dense rows, yet cannot finish:
-    // a rule keyed on payload size would get this exactly backwards.
+  it("is driven by output volume, not payload size", () => {
+    // 25 light rows are a tenth the bytes of 5 dense rows and still could not
+    // finish. A rule keyed on payload size would get this exactly backwards —
+    // and so would a rule keyed on row count alone.
     expect(2814).toBeLessThan(4851);
-    expect(withinEstimatedSyncBudget(5, 4851)).toBe(true);
-    expect(withinEstimatedSyncBudget(25, 2814)).toBe(false);
-  });
-
-  it("leaves headroom under what the 30s wall admits at measured throughput", () => {
-    // ~110 output tok/s x 30s ~= 3,300 tokens.
-    expect(SYNC_OUTPUT_TOKEN_BUDGET).toBeLessThan(3300 * 0.8);
+    expect(estimateOutputTokens(5, 4851)).toBeLessThan(THIRTY_SECOND_OUTPUT_CEILING);
+    expect(estimateOutputTokens(25, 2814)).toBeGreaterThan(THIRTY_SECOND_OUTPUT_CEILING);
   });
 });
 
-describe("the three row limits are separate controls", () => {
-  it("keeps the total-analysis ceiling far above what one request can finish", () => {
-    // The capability limit is about ONE request. The analysis ceiling is about a
-    // whole category run. If these ever converge, one has been mistaken for the
-    // other and category analysis has quietly become single-request analysis.
-    const largestCompletableRowCount = Array.from({ length: 100 }, (_, i) => i + 1)
-      .filter((n) => withinEstimatedSyncBudget(n, 0))
-      .pop()!;
-    expect(largestCompletableRowCount).toBeLessThan(maxRowsPerAnalysis("protected-demo"));
-    expect(largestCompletableRowCount).toBeLessThan(maxRowsPerAnalysis("local"));
+describe("why one request could never reach category scale", () => {
+  it("shows the complete synthetic demo category exceeding a single request", () => {
+    // The demo dataset is 25 rows. This is the failure batching was built for:
+    // not an unreasonable selection, the smallest complete one there is.
+    expect(estimateOutputTokens(25, 2814)).toBeGreaterThan(THIRTY_SECOND_OUTPUT_CEILING);
   });
 
-  it("refuses selections the total-analysis ceiling would happily admit", () => {
-    // 40 rows is well under either analysis ceiling and still over what one
-    // synchronous request can finish. That gap is the reason batching exists.
+  it("shows a real Amazon category exceeding it by orders of magnitude", () => {
+    // 526 rows at the measured dense density. The model's own output ceiling is
+    // 128k tokens, so this was never a matter of a longer timeout.
+    const denseBytesPerRow = 970;
+    expect(estimateOutputTokens(526, 526 * denseBytesPerRow)).toBeGreaterThan(128_000);
+  });
+});
+
+describe("the three row limits remain separate controls", () => {
+  it("keeps the analysis ceiling far above what one request could ever finish", () => {
+    // What one request can finish is about a REQUEST. The analysis ceiling is
+    // about a whole category run. If these ever converge, one has been mistaken
+    // for the other and category analysis has quietly become single-request
+    // analysis again.
+    const largestSingleRequestRowCount = Array.from({ length: 100 }, (_, i) => i + 1)
+      .filter((n) => estimateOutputTokens(n, 0) < THIRTY_SECOND_OUTPUT_CEILING)
+      .pop()!;
+    expect(largestSingleRequestRowCount).toBeLessThan(maxRowsPerAnalysis("protected-demo"));
+    expect(largestSingleRequestRowCount).toBeLessThan(maxRowsPerAnalysis("local"));
+  });
+
+  it("admits selections that one request could not have finished", () => {
+    // 40 rows is well under either analysis ceiling and over what one request
+    // could complete. That gap is precisely what batching exists to close, so
+    // the ceiling must not have been quietly lowered to avoid it.
     expect(40).toBeLessThan(maxRowsPerAnalysis("protected-demo"));
-    expect(withinEstimatedSyncBudget(40, 40 * 120)).toBe(false);
+    expect(estimateOutputTokens(40, 40 * 120)).toBeGreaterThan(THIRTY_SECOND_OUTPUT_CEILING);
   });
 
   it("does not conflate the per-request limit with the analysis ceiling", () => {
@@ -83,5 +113,6 @@ describe("the three row limits are separate controls", () => {
     // would start relying on it silently. Changing one must change the other,
     // and this test is what forces that to be a decision.
     expect(MAX_ROWS_PER_BATCH_REQUEST).toBe(DEFAULT_PLANNER_CONFIG.maxRowsPerBatch);
+    expect(MAX_ROWS_PER_BATCH_REQUEST).toBe(12);
   });
 });

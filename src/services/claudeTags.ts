@@ -76,12 +76,7 @@ export const MAX_REQUEST_BODY_BYTES = 250 * 1024;
 /** Max total review text after parsing (bytes). Over this → 413. */
 export const MAX_TOTAL_REVIEW_TEXT_BYTES = 200 * 1024;
 
-// --- Synchronous operating capability (client-side) --------------------------
-//
-// What the engine can actually FINISH in one request, which is far less than
-// what the endpoint will accept. The 30s provider timeout admits roughly
-// 3,300 output tokens at the measured ~110 tok/s; the budget below leaves
-// headroom against that.
+// --- Output-volume estimation ------------------------------------------------
 //
 // Output volume is what times out, and it scales with how much each row has to
 // say — not with row count alone and not with byte size alone. Measured on
@@ -89,12 +84,19 @@ export const MAX_TOTAL_REVIEW_TEXT_BYTES = 200 * 1024;
 // listings at ~970 B/row, and ~136 output tokens/row on light synthetic rows at
 // ~113 B/row. Fitting those two points gives the estimator below.
 //
-// It is a TWO-POINT FIT, and honest only as an interim guard. It is replaced by
-// rolling measured density once batching lands
-// (docs/adr/0001-category-scale-claude-analysis.md).
+// It is a TWO-POINT FIT and is used only where an estimate is honest: seeding
+// the planner's density before any batch has been measured, and projecting cost
+// and runtime before a run starts. Once batches complete, the planner sizes from
+// measured density instead (batchPlanner.ts), which is why the fit no longer has
+// to carry a refusal.
+//
+// It USED to gate whether a whole selection could finish in one synchronous
+// request. That gate is gone with batching: the pipeline splits the selection,
+// so "does this fit in one request" no longer decides anything an analyst sees.
+// The measurements it was fitted to are kept as regression evidence in
+// syncBudget.test.ts — they are the reason batching exists, and an estimator
+// retuned so that it would have mispredicted them should fail.
 
-/** Output-token budget for one synchronous request (~20s at ~110 tok/s). */
-export const SYNC_OUTPUT_TOKEN_BUDGET = 2200;
 /** Estimated fixed output cost per row: tag scaffolding, regardless of length. */
 export const ESTIMATED_OUTPUT_TOKENS_PER_ROW = 100;
 /** Estimated marginal output cost per byte of review text. */
@@ -108,18 +110,6 @@ export const ESTIMATED_OUTPUT_TOKENS_PER_TEXT_BYTE = 0.31;
  */
 export function estimateOutputTokens(rowCount: number, textBytes: number): number {
   return Math.round(rowCount * ESTIMATED_OUTPUT_TOKENS_PER_ROW + textBytes * ESTIMATED_OUTPUT_TOKENS_PER_TEXT_BYTE);
-}
-
-/**
- * Whether a selection is ESTIMATED to finish in one synchronous request.
- *
- * A projection from measured densities, not a guarantee: a selection that
- * passes may still time out if its rows are denser than the fit predicts. It is
- * deliberately conservative for that reason. It is a refusal gate, never a
- * promise of success.
- */
-export function withinEstimatedSyncBudget(rowCount: number, textBytes: number): boolean {
-  return estimateOutputTokens(rowCount, textBytes) <= SYNC_OUTPUT_TOKEN_BUDGET;
 }
 
 /** A review as accepted by the /api/analyze endpoint. */
