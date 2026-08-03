@@ -200,9 +200,21 @@ describe("a selection under the ceiling now runs instead of being refused", () =
     expect(new Set(sent).size).toBe(UNDER);
   });
 
-  it("accepts a selection exactly at the ceiling", async () => {
+  it("accepts a selection exactly at the ceiling once confirmed", async () => {
     mockWorkingFetch();
-    const result = await analyzeWithClaude(categoryInput, category("uploaded", CEILING));
+    const result = await analyzeWithClaude(categoryInput, category("uploaded", CEILING), {
+      confirmed: true,
+    });
     expect(result.reviewCount).toBe(CEILING);
+  });
+
+  it("refuses a costly selection that was never confirmed, without dispatching", async () => {
+    // The dialog is a courtesy; this is the guarantee. A caller that skips the
+    // question does not get to skip the price.
+    const fetchMock = mockWorkingFetch();
+    await expect(
+      analyzeWithClaude(categoryInput, category("uploaded", CEILING)),
+    ).rejects.toBeInstanceOf(AnalysisError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

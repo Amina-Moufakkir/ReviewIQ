@@ -135,9 +135,9 @@ describe("stateForQuery — other states", () => {
   });
 
   it("drops the spinner for a run the analyst has already navigated away from", () => {
-    const loading: AnalysisState = { status: "loading" };
-    expect(stateForQuery(loading, analyzed, analyzed)).toBe(loading);
-    expect(stateForQuery(loading, analyzed, other)).toEqual({ status: "idle" });
+    const running: AnalysisState = { status: "running", progress: null };
+    expect(stateForQuery(running, analyzed, analyzed)).toBe(running);
+    expect(stateForQuery(running, analyzed, other)).toEqual({ status: "idle" });
   });
 
   it("stays idle when nothing has been analyzed yet", () => {

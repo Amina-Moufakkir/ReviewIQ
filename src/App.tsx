@@ -294,7 +294,7 @@ export default function App() {
             onFromChange={setFrom}
             onToChange={setTo}
             onSubmit={() => analyze(query, dataset)}
-            isLoading={state.status === "loading"}
+            isLoading={state.status === "running"}
             engine={ANALYSIS_ENGINE}
           />
 
@@ -308,7 +308,7 @@ export default function App() {
               />
             ) : null}
 
-            {state.status === "loading" ? (
+            {state.status === "running" ? (
               <StateMessage
                 tone="loading"
                 title={`Reading ${unit.many}…`}

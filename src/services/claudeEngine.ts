@@ -1,12 +1,10 @@
 import type { AnalysisInput, AnalysisResult, Dataset } from "../types";
-import { AnalysisError, selectForScope } from "./analysisEngine";
-import type { IncomingReview } from "./claudeTags";
+import { AnalysisError } from "./analysisEngine";
 import { tagsToResult, zeroResult } from "./tagsToResult";
 import { runClaudePipeline } from "./claudePipeline";
 import { createAnalyzeDispatch, createCanonicalizeDispatch } from "./claudeDispatch";
-import { ceilingRefusalMessage, estimateRun, unsupportedGroupingMessage } from "./runEstimator";
-import { RUN_ENVIRONMENT } from "../config";
-import { unitFor, pluralize } from "../lib/datasetInfo";
+import { planClaudeRun } from "./claudeRunPlan";
+import type { ProgressReporter } from "./analysisProgress";
 
 /**
  * Client-side Claude engine, running the batched pipeline.
@@ -28,84 +26,54 @@ import { unitFor, pluralize } from "../lib/datasetInfo";
  * while resting on rows that were never analyzed or themes that were never
  * reconciled.
  */
+export interface ClaudeRunOptions {
+  signal?: AbortSignal;
+  onProgress?: ProgressReporter;
+  /**
+   * Set when the analyst has already approved this run's estimated cost.
+   *
+   * It suppresses nothing else. A selection over the ceiling, or one whose
+   * themes are projected unreconcilable, is still refused — those are not
+   * questions the analyst is being asked, and consent to a price is not consent
+   * to a run that cannot finish.
+   */
+  confirmed?: boolean;
+}
+
 export async function analyzeWithClaude(
   input: AnalysisInput,
   dataset: Dataset,
-  signal?: AbortSignal,
+  options: ClaudeRunOptions = {},
 ): Promise<AnalysisResult> {
-  // Same resolver the heuristic engine uses, so both engines always read the
-  // identical row set for a given query — the premise the comparison rests on.
-  const { subject: product, rows: matched } = selectForScope(
-    input,
-    dataset.reviews,
-    dataset.products,
-  );
-  const unit = unitFor(dataset);
-  // No reviews in the window: the legitimate empty state, not a fallback, and it
-  // must cost nothing.
-  //
-  // No mutation test kills this line, and that is expected: the pipeline has its
-  // own zero-row guard and `tagsToResult` returns `zeroResult` for an empty
-  // selection, so removing this produces the identical value by a longer route.
-  // It stays because it states the intent where the decision belongs, and keeps
-  // the guarantee from resting on two downstream layers continuing to special-
-  // case zero — neither of which is obliged to.
-  if (matched.length === 0) return zeroResult(product, input, unit);
+  // One planner, shared with the confirmation dialog, so the two can never
+  // disagree about whether this run is allowed or what to say if it is not.
+  const outcome = planClaudeRun(input, dataset);
+  const { subject, matched, rows, unit } = outcome.plan;
 
-  // Text only: sentiment on this path is derived from the review body, so the
-  // rating is not sent. See "Which engine for which data" in README.md.
-  const rows: IncomingReview[] = matched.map((r) => ({ id: r.id, text: r.text }));
+  // No reviews in the window: the legitimate empty state, not a fallback, and
+  // it must cost nothing.
+  if (outcome.decision === "empty") return zeroResult(subject, input, unit);
 
-  // The one client-side limit, and it is about the whole analysis rather than
-  // any single request: how large a selection this deployment permits at all.
-  //
-  // Batching removed the old ceiling, which asked whether a selection could be
-  // finished in ONE request and refused a 25-row category over a 30-second
-  // wall. That question no longer decides anything — the pipeline splits the
-  // selection — so what remains is the question an analyst can actually act on.
-  const estimate = estimateRun(rows, RUN_ENVIRONMENT);
-  if (estimate.exceedsCeiling) {
+  if (outcome.decision === "refuse") throw new AnalysisError(outcome.message);
+
+  // Refused here too, not only in the UI. The dialog is a courtesy; this is the
+  // guarantee. A caller that skips the dialog does not get to skip the price.
+  if (outcome.decision === "confirm" && !options.confirmed) {
     throw new AnalysisError(
-      ceilingRefusalMessage(estimate, pluralize(matched.length, unit), remediesFor(input)),
+      "This analysis needs to be confirmed before it can start. Run it again and confirm the estimate.",
     );
-  }
-
-  // Second preflight: the projection says these labels will not reduce to a
-  // single grouping request, so the run cannot complete.
-  //
-  // Refused HERE rather than surfaced as a confirmation, because there is
-  // nothing to weigh up. A run that ends in a terminal grouping failure has
-  // still paid for every tagging request it made along the way, and those
-  // results cannot be salvaged — reporting on unreconciled labels would
-  // under-count every theme two requests happened to name differently. Spending
-  // toward a known failure is not a trade-off an analyst should be offered.
-  if (estimate.canonicalization.unsupported) {
-    throw new AnalysisError(unsupportedGroupingMessage(remediesFor(input)));
   }
 
   const result = await runClaudePipeline(rows, {
     analyze: createAnalyzeDispatch(fetch),
     canonicalize: createCanonicalizeDispatch(fetch),
-    signal,
+    signal: options.signal,
+    onProgress: options.onProgress,
   });
 
   // Deterministic from here on. `result.tags` are CanonicalTag[], which is the
   // only shape this accepts — raw per-batch tags are a compile error, because
   // aggregating them would under-count every theme two batches named
   // differently. See canonicalTag.ts.
-  return tagsToResult(input, product, matched, result.tags, unit);
-}
-
-/**
- * Narrowings that actually exist for this query.
- *
- * Advice has to be followable. Undated data has no window to narrow, so offering
- * that would send the analyst after a control that is not on screen; and "pick
- * one product" means nothing when a single product is already the scope.
- */
-function remediesFor(input: AnalysisInput): string[] {
-  const remedies: string[] = [];
-  if (input.scope.kind === "category") remedies.push("analyze a single product instead");
-  if (input.from && input.to) remedies.push("narrow the date range");
-  return remedies;
+  return tagsToResult(input, subject, matched, result.tags, unit);
 }
