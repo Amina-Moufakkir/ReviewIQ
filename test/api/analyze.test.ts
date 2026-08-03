@@ -308,10 +308,14 @@ describe("success path", () => {
     await handler(req(validBody()), r);
 
     expect(captured.status).toBe(200);
+    // Deliberately exact rather than a subset match: the success body is the
+    // one place model output reaches the client, so an unexpected extra field
+    // must fail here rather than be quietly tolerated.
     expect(captured.body).toEqual({
       tags: [
         { review_id: "r1", theme: "Comfort", sentiment: "praise", evidence_span: "comfortable to wear" },
       ],
+      usage: { inputTokens: 1234, outputTokens: 56 },
     });
   });
 
@@ -429,7 +433,54 @@ describe("provider response failures are controlled", () => {
     await handler(req(validBody()), r);
 
     expect(captured.status).toBe(200);
-    expect(captured.body).toEqual({ tags: [] });
+    expect(captured.body).toMatchObject({ tags: [] });
+  });
+
+  /**
+   * Usage travels with the response, not only into the log.
+   *
+   * The client-side planner sizes the next batch from an EWMA of measured output
+   * tokens per row. Without a real number it folds in zero, the density estimate
+   * collapses, and batches ramp to the largest the server accepts however dense
+   * the rows are — the exact condition that produced the measured timeouts.
+   */
+  it("returns the provider's token usage alongside the tags", () => {
+    mocks.stream.mockReturnValue(goodStream());
+    const { r, captured } = res();
+    return handler(req(validBody()), r).then(() => {
+      expect(captured.status).toBe(200);
+      expect(captured.body).toMatchObject({
+        usage: { inputTokens: 1234, outputTokens: 56 },
+      });
+    });
+  });
+
+  it("reports usage as absent rather than zero when the provider omits it", async () => {
+    // A fabricated figure would corrupt the planner's density estimate more
+    // quietly than a missing one, which the client already treats as unknown.
+    mocks.stream.mockReturnValue({
+      finalMessage: async () => ({
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "[]" }],
+        usage: undefined,
+      }),
+    });
+    const { r, captured } = res();
+    await handler(req(validBody()), r);
+
+    const usage = (captured.body as { usage: Record<string, unknown> }).usage;
+    expect(usage.inputTokens).toBeUndefined();
+    expect(usage.outputTokens).toBeUndefined();
+  });
+
+  it("carries no review text or evidence in the usage block", async () => {
+    mocks.stream.mockReturnValue(goodStream());
+    const { r, captured } = res();
+    await handler(req(validBody()), r);
+
+    const usage = JSON.stringify((captured.body as { usage: unknown }).usage);
+    expect(usage).not.toContain(REVIEW_TEXT);
+    expect(usage).not.toContain("comfortable");
   });
 });
 
