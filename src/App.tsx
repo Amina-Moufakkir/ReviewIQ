@@ -161,6 +161,16 @@ export default function App() {
    */
   const isBusy = state.status === "confirming" || state.status === "running";
 
+  /**
+   * Whether a finished report exists to copy.
+   *
+   * Derived from the status alone, deliberately. Inferring it from "a result
+   * object exists", "no error is showing", or "nothing is loading" would all be
+   * true at moments when there is no current report — most dangerously during a
+   * new run, when the only report around belongs to the previous one.
+   */
+  const canCopyReport = state.status === "success";
+
   const [isLoadingDataset, setIsLoadingDataset] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [loadStats, setLoadStats] = useState<LoadStats | null>(null);
@@ -324,7 +334,7 @@ export default function App() {
             {state.status === "confirming" ? (
               <ConfirmRunDialog
                 plan={state.plan}
-                onConfirm={() => confirmRun(query, dataset)}
+                onConfirm={() => confirmRun(state.plan, query, dataset)}
                 onCancel={declineRun}
               />
             ) : null}
@@ -364,7 +374,7 @@ export default function App() {
               <StateMessage tone="error" title="Analysis failed" description={state.message} />
             ) : null}
 
-            {state.status === "success" ? (
+            {canCopyReport && state.status === "success" ? (
               <ResultsView
                 result={state.result}
                 unit={unit}
