@@ -478,6 +478,13 @@ estimate from text density, then sizes each subsequent batch from an EWMA of
 growing at most 1.5x at a time. Requests run six at a time, capped at 12 rows
 each — the limit the server enforces independently.
 
+The design was written up before it was built, and the reasoning behind each
+choice — bounded batching, grounded per-batch tagging, deterministic
+aggregation, cross-batch canonicalization, and controlled failure — is in
+[`docs/adr/0001-category-scale-claude-analysis.md`](docs/adr/0001-category-scale-claude-analysis.md).
+It is a design record rather than current documentation: where the two differ,
+this README and the code are authoritative.
+
 Independent batches name things independently, which is why grouping exists:
 batch 3's "battery life" and batch 47's "poor battery" are one concept wearing
 two labels, and aggregating them separately would split one theme's support in
