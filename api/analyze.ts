@@ -15,13 +15,14 @@ import {
 } from "../src/services/claudeTags.js";
 // The prompt lives in its own server-only module so the local benchmark
 // (scripts/bench-models.ts) can measure exactly what this handler sends,
-// without importing the HTTP layer. See api/claudePrompt.ts.
+// without importing the HTTP layer. It lives OUTSIDE api/ because Vercel turns
+// every file in that directory into a public route. See server/claudePrompt.ts.
 import {
   SYSTEM_PROMPT,
   buildUserContent,
   MAX_OUTPUT_TOKENS,
   CLAUDE_TIMEOUT_MS,
-} from "./claudePrompt.js";
+} from "../server/claudePrompt.js";
 
 // Allow up to the Claude call's own 30s timeout plus response overhead.
 export const config = { maxDuration: 60 };

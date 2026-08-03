@@ -15,3 +15,7 @@ public/amazon-products.csv
 # Design docs and local benchmark artifacts — not needed at runtime.
 bench/
 docs/
+
+# Belt and braces: api/ must contain only route handlers, and tests must never
+# deploy. The structural guard is test/api/routesOnly.test.ts.
+api/**/*.test.ts

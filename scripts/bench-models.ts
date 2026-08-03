@@ -8,7 +8,7 @@
  *
  * Design commitments:
  *  - It sends the SAME prompt and generation parameters the endpoint sends, by
- *    importing them from api/claudePrompt.ts. Nothing is copied.
+ *    importing them from server/claudePrompt.ts. Nothing is copied.
  *  - It scores with the SAME validator the endpoint uses (validateTags,
  *    normalizeTheme). Grounding is measured, never judged.
  *  - No model grades another model. Every metric is computed in TypeScript from
@@ -31,7 +31,7 @@ import {
   buildUserContent,
   MAX_OUTPUT_TOKENS,
   CLAUDE_TIMEOUT_MS,
-} from "../api/claudePrompt.ts";
+} from "../server/claudePrompt.ts";
 import {
   validateTags,
   parseTagArray,

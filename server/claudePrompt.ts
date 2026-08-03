@@ -5,6 +5,11 @@
  * (api/analyze.ts) and by the local model benchmark
  * (scripts/bench-models.ts). It is never bundled into the client.
  *
+ * It lives in server/ rather than api/ deliberately. Vercel publishes every
+ * file under api/ as a route, so a shared module placed there becomes a public
+ * endpoint that 500s on every request — reachable, invocation-consuming, and
+ * serving no purpose. Only request handlers belong in api/.
+ *
  * It lives apart from the handler so the benchmark can measure the prompt the
  * endpoint actually ships without importing the HTTP layer. A benchmark that
  * copied this text would silently drift from production and would then be
