@@ -1,8 +1,13 @@
 import type { AnalysisInput, AnalysisResult, Dataset } from "../types";
 import { AnalysisError, selectForScope } from "./analysisEngine";
-import { validateTags, MAX_REVIEWS_PER_REQUEST } from "./claudeTags";
+import {
+  validateTags,
+  estimateOutputTokens,
+  fitsSyncBudget,
+  SYNC_OUTPUT_TOKEN_BUDGET,
+} from "./claudeTags";
 import { tagsToResult, zeroResult } from "./tagsToResult";
-import { formatCount, pluralize, unitFor, type DatasetUnit } from "../lib/datasetInfo";
+import { formatCount, unitFor, type DatasetUnit } from "../lib/datasetInfo";
 
 /**
  * Client-side Claude engine. It filters reviews, calls the same-origin server
@@ -30,16 +35,22 @@ export async function analyzeWithClaude(
   // this is the legitimate empty state, not a fallback.
   if (matched.length === 0) return zeroResult(product, input, unit);
 
-  // Over-limit is refused here, before the request is built, rather than left
-  // to the server's 413. Two reasons: the round trip is pointless, and the
-  // server can only say "at most 100 reviews can be analyzed at once", which
-  // names no way forward. The client knows the subject, the count, the noun and
-  // whether a date window even exists, so it can say what to do instead.
+  // Refused here, before the request is built, against what the engine can
+  // actually FINISH — not against the endpoint's 100-row safety limit.
   //
-  // This is a real limit on category scope, not a corner case: three of the
-  // nine top-level categories in the Amazon dataset hold 447-526 records each.
-  if (matched.length > MAX_REVIEWS_PER_REQUEST) {
-    throw new AnalysisError(overLimitMessage(product.name, matched.length, unit, input));
+  // Those are different numbers and conflating them was a real defect: the
+  // endpoint accepts 100 rows, but one synchronous request completes roughly
+  // 5 dense rows before hitting the 30s wall. A selection of 30 sailed past the
+  // old check, then timed out — the app promising twenty times what it could
+  // deliver, and the analyst paying for the discovery in a 30-second wait.
+  //
+  // The estimate is deliberately conservative and is a stopgap. Batching removes
+  // this ceiling; see docs/adr/0001-category-scale-claude-analysis.md.
+  const textBytes = matched.reduce((sum, r) => sum + byteLength(r.text), 0);
+  if (!fitsSyncBudget(matched.length, textBytes)) {
+    throw new AnalysisError(
+      overLimitMessage(product.name, matched.length, textBytes, unit, input),
+    );
   }
 
   // Text only: sentiment on this path is derived from the review body, so the
@@ -141,18 +152,27 @@ async function messageForStatus(response: Response): Promise<string> {
   return "The analysis service is unavailable right now. Please try again.";
 }
 
+/** UTF-8 byte length, the same measure the endpoint's own text budget uses. */
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
 /**
  * Why a selection was refused, and what to do about it.
  *
- * Names the subject, the real count in the dataset's own noun, and the cap — an
- * analyst who is told "at most 100" without being told they asked for 526
- * cannot tell whether they were close. The remedies offered are only the ones
- * that actually exist for this query: narrowing a window is useless advice on
- * undated data, and "pick one product" means nothing under product scope.
+ * States the limit as what it is — how much this engine can finish in one
+ * request — rather than quoting a fixed row cap it cannot honour. A fixed
+ * number would be wrong in both directions: 30 light rows may be fine while 10
+ * dense ones are not, because what times out is how much the model has to write.
+ *
+ * The remedies offered are only the ones that actually exist for this query:
+ * narrowing a window is useless advice on undated data, and "pick one product"
+ * means nothing under product scope.
  */
 function overLimitMessage(
   subject: string,
   count: number,
+  textBytes: number,
   unit: DatasetUnit,
   input: AnalysisInput,
 ): string {
@@ -161,9 +181,11 @@ function overLimitMessage(
   if (input.from && input.to) remedies.push("narrow the date range");
   remedies.push("or switch to the heuristic engine, which has no limit");
 
+  const over = Math.round(estimateOutputTokens(count, textBytes) / SYNC_OUTPUT_TOKEN_BUDGET);
+
   return (
-    `${subject} has ${formatCount(count, unit)}. The Claude engine analyzes at most ` +
-    `${MAX_REVIEWS_PER_REQUEST} ${pluralize(MAX_REVIEWS_PER_REQUEST, unit)} at once. ` +
-    `You can ${remedies.join(", ")}.`
+    `${subject} has ${formatCount(count, unit)} — roughly ${over}x more than the Claude ` +
+    `engine can analyze in one pass. It reads every ${unit.one} and writes up a theme for ` +
+    `each, and one request has to finish inside 30 seconds. You can ${remedies.join(", ")}.`
   );
 }

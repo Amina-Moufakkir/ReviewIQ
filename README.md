@@ -276,12 +276,13 @@ for an average of many, that price becomes the whole answer: derive sentiment
 from the text and demote the rating to displayed context. The `analyzeReviews()`
 boundary lets both engines coexist so the right one runs for the right data.
 
-**Where this is verified, and where it is not.** The Claude engine is verified
-**locally only**, via `VITE_ANALYSIS_ENGINE=claude vercel dev`. It is **not
-enabled on the live Vercel deployment**, which runs heuristic-only: the
-production bundle is built without `VITE_ANALYSIS_ENGINE=claude`, so the Claude
-path and its `/api/analyze` call are tree-shaken out of the shipped JavaScript
-entirely. That deployment also cannot reach the real dataset — `.vercelignore`
+**Where it runs, and where it does not.** The Claude engine runs in local
+`vercel dev` and on a separate, **access-controlled Preview deployment**. It is
+**not enabled on the public production deployment**, which runs heuristic-only:
+the production bundle is built without `VITE_ANALYSIS_ENGINE=claude`, so the
+Claude path and its `/api/analyze` call are tree-shaken out of the shipped
+JavaScript entirely — verified against the deployed artifact, not merely assumed
+from an unset variable. That deployment also cannot reach the real dataset — `.vercelignore`
 excludes `public/amazon-products.csv`, because its redistribution terms are
 unverified and `src/amazon.csv` additionally carries real reviewer ids and
 names — so it falls back to the synthetic `amazon-demo.csv`. The live site
@@ -460,9 +461,10 @@ set on the Amazon data is the benchmark still deferred below.)
 The Claude call runs **server-side only**, in a Vercel serverless function at
 `api/analyze.ts`. The `ANTHROPIC_API_KEY` is read only via `process.env` inside
 that function — it is never bundled into the browser and never prefixed `VITE_`.
-By decision, the key is set in **no Vercel environment**; it lives only in a
-local `.env.local` for `vercel dev`, so the deployed `/api/analyze` answers a
-controlled `500 server_misconfigured` rather than running. See
+The key is set on **exactly one** Vercel target — Preview, scoped to the
+`claude-demo` branch — and on **no Production target**, so public production
+answers a controlled `503 analysis_disabled` rather than running. A separate key
+lives in a local `.env.local` for `vercel dev`. See
 [Environment variables](#environment-variables) and
 [Where this is verified, and where it is not](#which-engine-for-which-data) for
 why the live endpoint is intentionally keyless. The browser sends the filtered
@@ -477,9 +479,9 @@ Set `VITE_ANALYSIS_ENGINE` in the environment:
 | `heuristic` | Engine 1  | Browser only (GitHub Pages demo)     |
 | `claude`    | Engine 2  | Vercel (`api/analyze.ts`) + browser  |
 
-> **Note:** the `claude` row describes where the engine runs *when enabled*. In
-> this project it is enabled **only in local `vercel dev`** — never on the live
-> Vercel deployment, which ships heuristic-only with no key. See
+> **Note:** the `claude` row describes where the engine runs *when enabled*. It
+> is enabled in local `vercel dev` and on the protected Preview deployment —
+> never on **public production**, which ships heuristic-only with no key. See
 > [How the deployments coexist](#how-the-deployments-coexist).
 
 `VITE_ANALYSIS_ENGINE` carries only the engine name — it is **not** a secret and
@@ -577,7 +579,7 @@ that depends on remembering it is not a rule:
 | Mechanism | What it stops |
 | --- | --- |
 | `.gitignore` | the raw file and the generated fixture entering the repository |
-| `.vercelignore` | either file reaching a deployment — `vercel deploy` uploads the working directory, not the git tree, so `.gitignore` alone would not have caught this |
+| `.vercelignore` | either file reaching a deployment via a **CLI** `vercel deploy`, which uploads the working directory rather than the git tree. Git-triggered deployments build from the repository, where `.gitignore` already excludes both files — so this is defence in depth for the CLI path, not the primary control |
 | `scripts/build-amazon-csv.mjs` | reviewer ids and names surviving into the generated fixture |
 
 The two are labelled differently wherever they appear. The demo dataset loads as
@@ -850,9 +852,15 @@ Two properties this buys:
 
 - **No production build ever carries a key**, so a rollback can only ever reach a
   keyless build. That retires the rollback risk this section used to document.
-- **`vercel --prod` from the `claude-demo` branch is safe**: it would ship Claude
-  *code* to production, but with no key and `CLAUDE_ENABLED` unset it answers
-  `analysis_disabled`. Fail-closed by construction, not by discipline.
+- **`vercel --prod` from the `claude-demo` branch cannot leak the key**: it would
+  ship Claude *code* to production, but with no Production key and
+  `CLAUDE_ENABLED` unset there, it answers `analysis_disabled`. Fail-closed by
+  construction, not by discipline.
+
+  That is a statement about *secrets*, not a licence to do it. Production
+  advances through merged `main`; deploying from a feature branch desynchronises
+  the live commit from the branch history even when nothing leaks. See
+  [Deployment model](#deployment-model--git-connected-push-driven).
 
 **Use two separate keys** — one in your local `.env.local`, one in Vercel. Never
 the same value. Either can then be rotated without disturbing the other, and a
@@ -1004,8 +1012,20 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST -H 'content-type: application/j
   -d '{"reviews":[{"id":"r1","text":"hi"}]}' https://$DEMO/api/analyze       # 401
 
 vercel ls reviewiq          # no deployment URL may serve Claude anonymously
-npm run build && npm run verify:bundle   # no key or SDK in the shipped bundle
+npm run build && npm run verify:bundle          # client: no key or SDK in dist/
+npm run verify:deployment -- --build            # deployment: routes + function secrets
 ```
+
+The two scans answer different questions. `verify:bundle` reads `dist/` — what a
+browser downloads. `verify:deployment` reads `.vercel/output` — what Vercel
+publishes, which is the only place serverless routes and function-side secrets
+are visible. It asserts an **allowlist of published routes**, because every file
+under `api/` becomes a public endpoint: shared modules belong in `server/`, tests
+in `test/`. Neither scan ever prints a matched value.
+
+`verify:bundle` runs in CI. `verify:deployment` does not — it needs `vercel
+build` and therefore Vercel credentials, which CI does not hold. It is a
+pre-deploy step, and that gap is deliberate rather than overlooked.
 
 Then, signed in: run one analysis on the demo, confirm the report renders; set
 `CLAUDE_ENABLED=false`, redeploy, confirm `analysis_disabled`; set it back.
@@ -1074,6 +1094,29 @@ Per-request controls: fixed model from server config, fixed `max_tokens`,
 The Anthropic account's **$20 spending limit is the final backstop, not the
 control** — it cannot tell a legitimate run from a loop, which is why the kill
 switch and the per-request caps sit in front of it.
+
+**Two different row limits.** They are separate controls and must not be
+confused:
+
+| control | value | layer | meaning |
+| --- | --- | --- | --- |
+| `MAX_REVIEWS_PER_REQUEST` | 100 | server | **safety limit** — the most one request may carry. Bounds cost and payload, holds against a buggy or hostile client |
+| `SYNC_OUTPUT_TOKEN_BUDGET` | 2,200 tokens | client | **capability limit** — what one synchronous request can actually finish inside the 30s wall |
+
+The capability limit estimates *output* volume, because output is what times
+out: `100 x rows + 0.31 x textBytes`, fitted to the two measured densities
+(~405 output tok/row on dense Amazon listings, ~136 on light synthetic rows). It
+correctly predicts every benchmark run, including the 25-row synthetic timeout
+whose ~3,400 streamed tokens it estimates at 3,372.
+
+A fixed row cap cannot express this: 25 light rows fail where 5 dense rows
+succeed, despite being a tenth the bytes. Selections over budget are refused up
+front with an explanation, rather than accepted and timed out 30 seconds later —
+which is what the old check did, since it compared against the 100-row *safety*
+limit and let a 30-row selection straight through.
+
+The estimator is a two-point fit and an interim guard. Rolling measured density
+replaces it when batching lands.
 
 **Known limitation — category-scale analysis.** Benchmarking
 ([`bench/DECISION.md`](bench/DECISION.md)) showed the single-request design does

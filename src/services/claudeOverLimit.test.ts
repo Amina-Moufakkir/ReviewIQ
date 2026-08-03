@@ -2,16 +2,22 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import type { AnalysisInput, Dataset, Product, Review } from "../types";
 import { analyzeWithClaude } from "./claudeEngine";
 import { AnalysisError } from "./analysisEngine";
-import { MAX_REVIEWS_PER_REQUEST } from "./claudeTags";
+import { SYNC_OUTPUT_TOKEN_BUDGET, fitsSyncBudget } from "./claudeTags";
 
 /**
- * A whole category can exceed the endpoint's per-request cap where a single
- * product does not — three of the nine top-level categories in the real Amazon
- * dataset hold 447-526 records each. The engine must refuse clearly rather than
- * truncate, and must not spend a request finding out.
+ * A whole category can exceed what one synchronous request can finish where a
+ * single product does not — three of the nine top-level categories in the real
+ * Amazon dataset hold 447-526 records each. The engine must refuse clearly
+ * rather than truncate, and must not spend a request finding out.
+ *
+ * The limit checked here is the engine's synchronous CAPABILITY, not the
+ * endpoint's 100-row safety cap. Those were conflated before: a 30-row
+ * selection passed the cap check and then timed out. These tests deliberately
+ * use a size that is well under 100 rows and still over budget, so they fail if
+ * the two are ever collapsed back into one number.
  */
 
-const OVER = MAX_REVIEWS_PER_REQUEST + 1;
+const OVER = 40;
 
 function bigCategory(source: Dataset["source"], productCount = 3): Dataset {
   const products: Product[] = Array.from({ length: productCount }, (_, i) => ({
@@ -72,11 +78,26 @@ describe("Claude engine — a category over the cap", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("names the subject, the real count and the cap", async () => {
+  it("names the subject, the real count and how far over budget it is", async () => {
     mockFetch();
-    await expect(analyzeWithClaude(categoryInput, bigCategory("uploaded"))).rejects.toThrow(
-      new RegExp(`Electronics has ${OVER} reviews.*at most ${MAX_REVIEWS_PER_REQUEST}`),
-    );
+    const message = await messageFrom(analyzeWithClaude(categoryInput, bigCategory("uploaded")));
+    expect(message).toContain(`Electronics has ${OVER} reviews`);
+    expect(message).toMatch(/\d+x more than the Claude\s+engine can analyze in one pass/);
+  });
+
+  // The regression this whole change exists to prevent.
+  it("refuses a selection far under the endpoint's 100-row cap but over budget", async () => {
+    const fetchMock = mockFetch();
+    expect(OVER).toBeLessThan(100);              // the old check would have allowed this
+    await expect(analyzeWithClaude(categoryInput, bigCategory("uploaded"))).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();    // and it would have timed out 30s later
+  });
+
+  it("never quotes a fixed row cap it cannot honour", async () => {
+    mockFetch();
+    const message = await messageFrom(analyzeWithClaude(categoryInput, bigCategory("uploaded")));
+    expect(message).not.toMatch(/at most \d+/);
+    expect(message).not.toContain("100");
   });
 
   it("uses the dataset's own noun, not a hardcoded 'reviews'", async () => {
@@ -114,8 +135,8 @@ describe("Claude engine — a category over the cap", () => {
   });
 });
 
-describe("Claude engine — at or under the cap", () => {
-  it("sends the request when the selection exactly fills the cap", async () => {
+describe("Claude engine — within the synchronous budget", () => {
+  it("sends the request for a selection that fits", async () => {
     const fetchMock = vi.fn(
       () =>
         new Response(JSON.stringify({ tags: [] }), {
@@ -126,9 +147,19 @@ describe("Claude engine — at or under the cap", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const dataset = bigCategory("uploaded");
-    const atCap: Dataset = { ...dataset, reviews: dataset.reviews.slice(0, MAX_REVIEWS_PER_REQUEST) };
+    // Small enough to finish: the estimator must agree before we assert on it,
+    // so this stays true if the budget is ever retuned.
+    const rows = dataset.reviews.slice(0, 5);
+    const bytes = rows.reduce((n, r) => n + new TextEncoder().encode(r.text).length, 0);
+    expect(fitsSyncBudget(rows.length, bytes)).toBe(true);
 
-    await analyzeWithClaude(categoryInput, atCap);
+    await analyzeWithClaude(categoryInput, { ...dataset, reviews: rows });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the budget below what the 30s wall admits at measured throughput", () => {
+    // ~110 output tok/s measured x 30s ~= 3,300 tokens. The budget must leave
+    // real headroom under that, or the guard is decorative.
+    expect(SYNC_OUTPUT_TOKEN_BUDGET).toBeLessThan(3300 * 0.8);
   });
 });

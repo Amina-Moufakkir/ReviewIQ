@@ -43,12 +43,60 @@ export interface ValidationOutcome {
 
 // --- Request limits (server-enforced; named so they can be tuned later) ------
 
-/** Max reviews accepted in one request. Over this → 413, never truncated. */
+/**
+ * Max reviews the ENDPOINT accepts in one request. Over this → 413.
+ *
+ * This is a **safety limit**, not a statement of capability. It bounds the blast
+ * radius of a single request — cost, time, payload — and holds even if a client
+ * is buggy, stale, or hostile. It is deliberately far above what the engine can
+ * actually complete synchronously; see `SYNC_OUTPUT_TOKEN_BUDGET` for that. The
+ * two must never be conflated: one says what a request may carry, the other
+ * says what the engine can finish.
+ */
 export const MAX_REVIEWS_PER_REQUEST = 100;
 /** Max serialized request-body size (bytes). Over this → 413. */
 export const MAX_REQUEST_BODY_BYTES = 250 * 1024;
 /** Max total review text after parsing (bytes). Over this → 413. */
 export const MAX_TOTAL_REVIEW_TEXT_BYTES = 200 * 1024;
+
+// --- Synchronous operating capability (client-side) --------------------------
+//
+// What the engine can actually FINISH in one request, which is far less than
+// what the endpoint will accept. The 30s provider timeout admits roughly
+// 3,300 output tokens at the measured ~110 tok/s; the budget below leaves
+// headroom against that.
+//
+// Output volume is what times out, and it scales with how much each row has to
+// say — not with row count alone and not with byte size alone. Measured on
+// 2026-08-02 (bench/DECISION.md): ~405 output tokens/row on dense Amazon
+// listings at ~970 B/row, and ~136 output tokens/row on light synthetic rows at
+// ~113 B/row. Fitting those two points gives the estimator below.
+//
+// It is a TWO-POINT FIT, and honest only as an interim guard. It is replaced by
+// rolling measured density once batching lands
+// (docs/adr/0001-category-scale-claude-analysis.md).
+
+/** Output-token budget for one synchronous request (~20s at ~110 tok/s). */
+export const SYNC_OUTPUT_TOKEN_BUDGET = 2200;
+/** Fixed output cost per row: the tag scaffolding a row incurs regardless of length. */
+export const SYNC_TOKENS_PER_ROW = 100;
+/** Marginal output cost per byte of review text. */
+export const SYNC_TOKENS_PER_TEXT_BYTE = 0.31;
+
+/**
+ * Estimated output tokens for a selection. Validated against every measurement
+ * taken: it correctly predicts the 5-row dense pass, the 10- and 20-row dense
+ * timeouts, and the 25-row synthetic timeout — whose ~3,400 streamed tokens it
+ * estimates at 3,372.
+ */
+export function estimateOutputTokens(rowCount: number, textBytes: number): number {
+  return Math.round(rowCount * SYNC_TOKENS_PER_ROW + textBytes * SYNC_TOKENS_PER_TEXT_BYTE);
+}
+
+/** Whether a selection is small enough to finish in one synchronous request. */
+export function fitsSyncBudget(rowCount: number, textBytes: number): boolean {
+  return estimateOutputTokens(rowCount, textBytes) <= SYNC_OUTPUT_TOKEN_BUDGET;
+}
 
 /** A review as accepted by the /api/analyze endpoint. */
 export interface IncomingReview {
