@@ -44,16 +44,33 @@ export interface ValidationOutcome {
 // --- Request limits (server-enforced; named so they can be tuned later) ------
 
 /**
- * Max reviews the ENDPOINT accepts in one request. Over this → 413.
+ * Max rows the ENDPOINT accepts in ONE BATCH request. Over this → 413.
  *
- * This is a **safety limit**, not a statement of capability. It bounds the blast
- * radius of a single request — cost, time, payload — and holds even if a client
- * is buggy, stale, or hostile. It is deliberately far above what the engine can
- * actually complete synchronously; see `SYNC_OUTPUT_TOKEN_BUDGET` for that. The
- * two must never be conflated: one says what a request may carry, the other
- * says what the engine can finish.
+ * The endpoint takes a single batch, not a whole analysis selection, so this
+ * bounds one request and nothing else. It is enforced server-side and
+ * independently of the client: it holds even if the planner is buggy, stale, or
+ * hostile, which is the only reason it exists.
+ *
+ * It is set equal to the planner's `maxRowsPerBatch` with **no slack**. A margin
+ * would be hidden coupling: a future planner retune would silently start relying
+ * on it, and nobody would notice until a request was refused in production.
+ * Changing the planner's ceiling must change this contract deliberately, with
+ * the tests that pin it.
+ *
+ * Three limits coexist and must never be conflated:
+ *
+ *  - `MAX_ROWS_PER_ANALYSIS` (runEstimator) — the whole category run, 60 on the
+ *    protected demo and 600 locally. This is the analyst-facing ceiling.
+ *  - `maxRowsPerBatch` (batchPlanner) — how many rows the client puts in one
+ *    batch. Planning configuration.
+ *  - `MAX_ROWS_PER_BATCH_REQUEST` (here) — what the server will accept in one
+ *    request, enforced independently of both.
+ *
+ * A 413 from this limit is a client-contract violation, not analyst guidance:
+ * reaching it means the orchestrator is broken, and no user-facing copy should
+ * ever quote it.
  */
-export const MAX_REVIEWS_PER_REQUEST = 100;
+export const MAX_ROWS_PER_BATCH_REQUEST = 12;
 /** Max serialized request-body size (bytes). Over this → 413. */
 export const MAX_REQUEST_BODY_BYTES = 250 * 1024;
 /** Max total review text after parsing (bytes). Over this → 413. */

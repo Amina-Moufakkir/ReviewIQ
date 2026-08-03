@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   estimateOutputTokens,
   withinEstimatedSyncBudget,
-  MAX_REVIEWS_PER_REQUEST,
+  MAX_ROWS_PER_BATCH_REQUEST,
   SYNC_OUTPUT_TOKEN_BUDGET,
 } from "./claudeTags";
+import { maxRowsPerAnalysis } from "./runEstimator";
+import { DEFAULT_PLANNER_CONFIG } from "./batchPlanner";
 
 /**
  * The synchronous budget is the app's answer to a measured limit, so it is
@@ -48,19 +50,38 @@ describe("synchronous budget — checked against measured runs", () => {
   });
 });
 
-describe("the safety limit and the capability limit are different controls", () => {
-  it("keeps the endpoint cap far above what one request can finish", () => {
-    // If these ever converge, one of them has been mistaken for the other.
+describe("the three row limits are separate controls", () => {
+  it("keeps the total-analysis ceiling far above what one request can finish", () => {
+    // The capability limit is about ONE request. The analysis ceiling is about a
+    // whole category run. If these ever converge, one has been mistaken for the
+    // other and category analysis has quietly become single-request analysis.
     const largestCompletableRowCount = Array.from({ length: 100 }, (_, i) => i + 1)
       .filter((n) => withinEstimatedSyncBudget(n, 0))
-      .pop();
-    expect(largestCompletableRowCount).toBeLessThan(MAX_REVIEWS_PER_REQUEST);
+      .pop()!;
+    expect(largestCompletableRowCount).toBeLessThan(maxRowsPerAnalysis("protected-demo"));
+    expect(largestCompletableRowCount).toBeLessThan(maxRowsPerAnalysis("local"));
   });
 
-  it("refuses selections the endpoint would happily accept", () => {
-    // 40 rows is under the 100-row cap and over budget. This gap is the bug the
-    // capability model exists to close, so it must stay non-empty.
-    expect(40).toBeLessThan(MAX_REVIEWS_PER_REQUEST);
+  it("refuses selections the total-analysis ceiling would happily admit", () => {
+    // 40 rows is well under either analysis ceiling and still over what one
+    // synchronous request can finish. That gap is the reason batching exists.
+    expect(40).toBeLessThan(maxRowsPerAnalysis("protected-demo"));
     expect(withinEstimatedSyncBudget(40, 40 * 120)).toBe(false);
+  });
+
+  it("does not conflate the per-request limit with the analysis ceiling", () => {
+    // The endpoint takes one batch; the ceiling governs a whole run. The batch
+    // limit must be far the smaller of the two, or the endpoint has silently
+    // become the thing that bounds an analysis.
+    expect(MAX_ROWS_PER_BATCH_REQUEST).toBeLessThan(maxRowsPerAnalysis("protected-demo"));
+    expect(MAX_ROWS_PER_BATCH_REQUEST).toBeLessThan(maxRowsPerAnalysis("local"));
+    expect(maxRowsPerAnalysis("protected-demo")).not.toBe(MAX_ROWS_PER_BATCH_REQUEST);
+  });
+
+  it("pins the per-request limit to the planner's batch ceiling, with no slack", () => {
+    // Deliberately equal. A margin would be hidden coupling: a planner retune
+    // would start relying on it silently. Changing one must change the other,
+    // and this test is what forces that to be a decision.
+    expect(MAX_ROWS_PER_BATCH_REQUEST).toBe(DEFAULT_PLANNER_CONFIG.maxRowsPerBatch);
   });
 });

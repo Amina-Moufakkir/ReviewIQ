@@ -7,9 +7,9 @@ import { analyze } from "../services/analysisEngine";
 import { analyzeReviews } from "../services/analyzeReviews";
 import {
   parseReviewRequest,
-  MAX_REVIEWS_PER_REQUEST,
   MAX_TOTAL_REVIEW_TEXT_BYTES,
 } from "../services/claudeTags";
+import { maxRowsPerAnalysis } from "../services/runEstimator";
 
 /**
  * Dataset-level coverage for the Amazon path, over two fixtures:
@@ -105,7 +105,10 @@ function assertAdapterInvariants(name: string, result: AmazonAdapterResult) {
       // only, because sentiment on that path is derived from the words alone.
       const body = { reviews: matched.map((r) => ({ id: r.id, text: r.text })) };
       expect(Array.isArray(parseReviewRequest(body)), `rejected for ${product.id}`).toBe(true);
-      expect(matched.length).toBeLessThanOrEqual(MAX_REVIEWS_PER_REQUEST);
+      // The endpoint now takes one batch, so a whole product selection is no
+      // longer required to fit a single request — the run ceiling is what
+      // governs it. Byte and shape limits below still apply per request.
+      expect(matched.length).toBeLessThanOrEqual(maxRowsPerAnalysis("local"));
       const bytes = matched.reduce((sum, r) => sum + Buffer.byteLength(r.text, "utf8"), 0);
       expect(bytes).toBeLessThanOrEqual(MAX_TOTAL_REVIEW_TEXT_BYTES);
     }
