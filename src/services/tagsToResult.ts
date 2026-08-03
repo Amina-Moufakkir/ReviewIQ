@@ -1,14 +1,19 @@
 import type { AnalysisInput, AnalysisResult, Finding, Product, Review, Sentiment } from "../types";
-import type { ValidatedTag } from "./claudeTags";
+import type { CanonicalTag } from "./canonicalTag";
 import { attribution, buildSummary, minEvidenceFor } from "./analysisEngine";
 import { REVIEW, pluralize, type DatasetUnit } from "../lib/datasetInfo";
 import { lowerFirst } from "../lib/themeLabel";
 
 /**
- * Build an `AnalysisResult` from validated Claude tags. All counts, percentages,
- * and thresholds are computed HERE in TypeScript — never taken from a number the
- * model wrote. The result satisfies the same contract the heuristic engine does,
- * so the UI is unchanged.
+ * Build an `AnalysisResult` from CANONICALIZED Claude tags. All counts,
+ * percentages, and thresholds are computed HERE in TypeScript — never taken from
+ * a number the model wrote. The result satisfies the same contract the heuristic
+ * engine does, so the UI is unchanged.
+ *
+ * The parameter type is `CanonicalTag[]`, not `ValidatedTag[]`, and that is
+ * load-bearing rather than cosmetic. Raw per-batch tags would aggregate without
+ * complaint and under-count every theme two batches happened to name
+ * differently; the type boundary makes that a compile error. See canonicalTag.ts.
  *
  * Recommendations are derived from the fault findings (see `recommendationsFor`)
  * rather than written by the model.
@@ -17,7 +22,7 @@ export function tagsToResult(
   input: AnalysisInput,
   product: Product,
   matched: Review[],
-  tags: ValidatedTag[],
+  tags: CanonicalTag[],
   unit: DatasetUnit = REVIEW,
 ): AnalysisResult {
   const reviewCount = matched.length;
@@ -98,16 +103,16 @@ function recommendationsFor(faults: Finding[], reviewCount: number, unit: Datase
 
 
 interface Group {
-  /** Display label — the first original spelling seen for this normalized key. */
+  /** Display label — the canonical theme name, always one the model was given. */
   label: string;
   /** Unique supporting reviews (a review counts at most once). */
   reviewIds: Set<string>;
   /** Representative supporting tags, in submission order. */
-  tags: ValidatedTag[];
+  tags: CanonicalTag[];
 }
 
 function findingsForSentiment(
-  tags: ValidatedTag[],
+  tags: CanonicalTag[],
   sentiment: "praise" | "fault",
   reviewCount: number,
   reviewsById: Map<string, Review>,
@@ -116,10 +121,12 @@ function findingsForSentiment(
   const groups = new Map<string, Group>();
   for (const tag of tags) {
     if (tag.sentiment !== sentiment) continue; // neutral tags produce no finding
-    let group = groups.get(tag.themeKey);
+    // Grouped by the CANONICAL key, so two batches that named one theme
+    // differently land in the same group instead of splitting its support.
+    let group = groups.get(tag.canonicalKey);
     if (!group) {
-      group = { label: tag.theme, reviewIds: new Set(), tags: [] };
-      groups.set(tag.themeKey, group);
+      group = { label: tag.canonicalTheme, reviewIds: new Set(), tags: [] };
+      groups.set(tag.canonicalKey, group);
     }
     group.reviewIds.add(tag.reviewId);
     group.tags.push(tag);
@@ -150,7 +157,7 @@ function findingsForSentiment(
  * review appears earliest in the matched (date-sorted) list, then by evidence
  * text, so the same input always yields the same quote.
  */
-function pickRepresentative(tags: ValidatedTag[], reviewsById: Map<string, Review>): ValidatedTag {
+function pickRepresentative(tags: CanonicalTag[], reviewsById: Map<string, Review>): CanonicalTag {
   const order = new Map([...reviewsById.keys()].map((id, i) => [id, i] as const));
   return [...tags].sort((a, b) => {
     const oa = order.get(a.reviewId) ?? 0;
