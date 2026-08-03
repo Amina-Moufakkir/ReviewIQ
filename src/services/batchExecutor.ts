@@ -10,7 +10,7 @@ import {
   type PlannerConfig,
   type ResizeReason,
 } from "./batchPlanner";
-import { projectBatchCount } from "./runEstimator";
+import { DEFAULT_ESTIMATOR_CONFIG, projectBatchCount } from "./runEstimator";
 
 /**
  * Bounded, cancellable execution of a batched analysis run.
@@ -218,10 +218,27 @@ export async function executeBatches(
    * strictly smaller than the attempt that failed whatever the siblings report.
    */
   let retryRowCap: number | null = null;
+  /**
+   * How many rows at the FRONT of `remaining` are requeued rather than fresh.
+   *
+   * A draw never mixes the two. Per-row attempt counting stops fresh rows being
+   * mis-stamped, but on its own it does not help them: a batch holding one
+   * exhausted row cannot be retried, so any fresh row sharing that draw is
+   * dragged down with it. Keeping requeued rows in their own batches means a
+   * row's fate depends only on its own history.
+   */
+  let requeuedRows = 0;
 
+  // Projected with the planner this run will actually use. Defaulting here
+  // would size the allowance for a different batch shape than the one being
+  // executed: a smaller configured batch means more batches, and a budget
+  // computed from the default would be too small to cover them.
   const retryBudget = Math.max(
     1,
-    Math.ceil(projectBatchCount(rows) * config.retryBudgetFraction),
+    Math.ceil(
+      projectBatchCount(rows, DEFAULT_ESTIMATOR_CONFIG, config.planner) *
+        config.retryBudgetFraction,
+    ),
   );
 
   const fail = (error: BatchExecutionError) => {
@@ -234,11 +251,20 @@ export async function executeBatches(
   /** Push rows back to the FRONT so a retry re-splits them at the current size. */
   const requeue = (batch: Batch) => {
     planState = { ...planState, remaining: [...batch.rows, ...planState.remaining] };
+    requeuedRows += batch.rows.length;
   };
 
   const runBatch = async (batch: Batch): Promise<void> => {
-    const attempt = Math.max(...batch.rows.map((r) => attempts.get(r.id) ?? 0)) + 1;
-    for (const row of batch.rows) attempts.set(row.id, attempt);
+    // Counted PER ROW, never batch-wide.
+    //
+    // A retry draw can mix requeued rows with fresh ones: the one-shot ceiling
+    // covers only the next draw, so the draw after it takes the rest of the
+    // requeued rows plus whatever fresh rows fit. Taking max(attempts) + 1 for
+    // the batch and stamping it on every row would mark those fresh rows as
+    // already retried before their first attempt had finished, and a later
+    // transient failure would terminate the run instead of retrying them.
+    for (const row of batch.rows) attempts.set(row.id, (attempts.get(row.id) ?? 0) + 1);
+    const attempt = Math.max(...batch.rows.map((r) => attempts.get(r.id) ?? 1));
 
     let response: DispatchResponse;
     try {
@@ -281,9 +307,14 @@ export async function executeBatches(
       // Collapsing them would leave an operator unable to tell a broken request
       // from a run that simply gave up.
       const retryable = SHRINK_AND_RETRY.has(code) || RETRY_UNCHANGED.has(code);
+      // Exhausted only if some row in THIS batch has personally used its
+      // attempts — not because a neighbour in the same draw has.
+      const anyRowExhausted = batch.rows.some(
+        (r) => (attempts.get(r.id) ?? 0) >= config.maxAttemptsPerRow,
+      );
       const reason: ExecutionFailure | null = !retryable
         ? "terminal_batch_failure"
-        : attempt >= config.maxAttemptsPerRow
+        : anyRowExhausted
           ? "attempts_exhausted"
           : retriesUsed >= retryBudget
             ? "retry_budget_exhausted"
@@ -392,13 +423,14 @@ export async function executeBatches(
       // Apply the retry ceiling for this draw only, then restore the planner's
       // own learned size so one retry does not permanently pin the run small.
       const learnedRows = planState.rowsPerBatch;
-      const drawState =
-        retryRowCap === null
-          ? planState
-          : { ...planState, rowsPerBatch: Math.min(learnedRows, retryRowCap) };
-      const step = nextBatch(drawState);
+      let drawRows = retryRowCap === null ? learnedRows : Math.min(learnedRows, retryRowCap);
+      // Never let a draw straddle the requeued/fresh boundary.
+      if (requeuedRows > 0) drawRows = Math.min(drawRows, requeuedRows);
+
+      const step = nextBatch({ ...planState, rowsPerBatch: drawRows });
       if (!step) break;
       retryRowCap = null;
+      requeuedRows = Math.max(0, requeuedRows - step.batch.rows.length);
       planState = { ...step.state, rowsPerBatch: learnedRows };
       const batch = { ...step.batch, index: batchIndex++ };
 

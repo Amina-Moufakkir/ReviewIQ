@@ -319,6 +319,92 @@ describe("retries", () => {
     expect(new Set(keys).size).toBe(keys.length);
     expect(result.tags).toHaveLength(24);
   });
+
+  it("never mixes requeued rows with fresh rows in one draw", async () => {
+    // The regression this guards: the one-shot retry ceiling covers only the
+    // NEXT draw, so the draw after it used to take the remaining requeued rows
+    // plus whatever fresh rows fit. Sibling completions resizing the planner
+    // upward make that mix larger and more likely. With batch-wide attempt
+    // counting those fresh rows were stamped as already-retried before their
+    // first attempt finished.
+    const everSeen = new Set<string>();
+    const mixed: string[][] = [];
+    let failedOnce = false;
+
+    // No artificial delay on purpose. With one, the failing batch completes
+    // FIRST and the retry is drawn before any sibling has grown the planner —
+    // which is exactly the case where mixing cannot happen, so the test would
+    // pass whether the guard existed or not.
+    const h = harness({
+      respond: (request) => {
+        const fresh = request.rows.filter((r) => !everSeen.has(r.id));
+        const repeated = request.rows.filter((r) => everSeen.has(r.id));
+        if (fresh.length > 0 && repeated.length > 0) {
+          mixed.push(request.rows.map((r) => r.id));
+        }
+        for (const r of request.rows) everSeen.add(r.id);
+
+        // Fail the first batch so rows are requeued, then report very cheap
+        // batches so siblings grow the planner while the retry is pending.
+        if (!failedOnce) {
+          failedOnce = true;
+          return { ok: false, code: "provider_unavailable", tags: undefined };
+        }
+        return { outputTokens: 1, latencyMs: 100 };
+      },
+    });
+
+    const result = await executeBatches(rows(120), {
+      dispatch: h.dispatch,
+      config: { ...DEFAULT_EXECUTOR_CONFIG, retryBudgetFraction: 5 },
+    });
+
+    expect(mixed, `draws mixing requeued and fresh rows: ${JSON.stringify(mixed)}`).toEqual([]);
+    expect(result.rowCount).toBe(120);
+  });
+
+  it("lets a fresh row keep its own retry after sharing a run with a retried one", async () => {
+    // Attempts are per row. A row that has never failed must still be
+    // retryable even after another row in the run has used its retry.
+    const failed = new Set<string>();
+    const h = harness({
+      respond: (request) => {
+        // Fail each row's first attempt exactly once, across the whole run.
+        if (request.rows.some((r) => !failed.has(r.id))) {
+          for (const r of request.rows) failed.add(r.id);
+          return { ok: false, code: "provider_unavailable", tags: undefined };
+        }
+        return null;
+      },
+    });
+    const result = await executeBatches(rows(40), {
+      dispatch: h.dispatch,
+      config: { ...DEFAULT_EXECUTOR_CONFIG, retryBudgetFraction: 5 },
+    });
+
+    expect(result.rowCount).toBe(40);
+    expect(result.telemetry.retriesUsed).toBeGreaterThan(1);
+  });
+
+  it("sizes the retry budget with the planner execution actually uses", async () => {
+    // A smaller configured batch means more batches, so the allowance must be
+    // larger. Projecting with the default planner would under-size it.
+    const withDefault = await executeBatches(rows(120), { dispatch: harness().dispatch });
+    const withSmallBatches = await executeBatches(rows(120), {
+      dispatch: harness().dispatch,
+      config: {
+        ...DEFAULT_EXECUTOR_CONFIG,
+        planner: { ...DEFAULT_PLANNER_CONFIG, maxRowsPerBatch: 2, calibrationRows: 2 },
+      },
+    });
+
+    expect(withSmallBatches.telemetry.batchCount).toBeGreaterThan(
+      withDefault.telemetry.batchCount,
+    );
+    expect(withSmallBatches.telemetry.retryBudget).toBeGreaterThan(
+      withDefault.telemetry.retryBudget,
+    );
+  });
 });
 
 // --- cancellation ------------------------------------------------------------
