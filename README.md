@@ -929,25 +929,63 @@ VITE_ANALYSIS_ENGINE=claude CLAUDE_ENABLED=true ANTHROPIC_API_KEY="$ANTHROPIC_AP
 runtime, so the key and the kill switch must be exported into the process.
 Without `CLAUDE_ENABLED=true` the endpoint correctly answers `analysis_disabled`.
 
+### Deployment model — Git-connected, push-driven
+
+ReviewIQ deploys through **Vercel's GitHub integration**, not manual CLI
+deploys. The project is linked to `Amina-Moufakkir/ReviewIQ` with `main` as the
+Production Branch, so:
+
+| push to | produces |
+| --- | --- |
+| `main` | a Vercel **production** deployment **and** a GitHub Pages build — two intentional public deployments, not duplication |
+| `claude-demo` | a protected **preview** deployment carrying the branch-scoped Claude variables |
+| any other branch | an ordinary protected preview, with **no** Claude variables |
+
+Two consequences worth internalising:
+
+- **Production advances through merged `main`.** Avoid `vercel --prod` from a
+  feature branch; it bypasses review and desynchronises the deployed commit from
+  the branch history.
+- **Branch-scoped Preview variables require the Git connection.** They are keyed
+  on the branch of a Git-triggered deployment, so `vercel env add … preview
+  <branch>` fails outright on an unlinked project, and a CLI `vercel deploy`
+  produces a deployment URL but **no `…-git-<branch>-…` alias**. The stable demo
+  link only exists for push-triggered deployments.
+
 ### Deployment runbook
 
-1. **Create a new Anthropic key** dedicated to the demo. Do not reuse the local one.
-2. `git checkout -b claude-demo && git push -u origin claude-demo`
-3. Add the variables, scoped to Preview **and that branch only**:
+Prerequisite, once: install the [Vercel GitHub App](https://github.com/apps/vercel)
+for the repository, then `vercel git connect`. Confirm `main` is the Production
+Branch before continuing.
+
+1. **Create a new Anthropic key** dedicated to the demo, in the Anthropic
+   Console. Do not reuse the local one, and do not paste it into a terminal that
+   records history or into any assistant's context.
+2. `git checkout -b claude-demo main && git push -u origin claude-demo`
+3. Add the four non-secret variables, scoped to Preview **and that branch only**:
    ```bash
-   vercel env add ANTHROPIC_API_KEY preview claude-demo    # mark Sensitive
-   vercel env add ANTHROPIC_MODEL preview claude-demo
-   vercel env add CLAUDE_ENABLED preview claude-demo       # value: true
-   vercel env add LOG_SALT preview claude-demo
-   vercel env add VITE_ANALYSIS_ENGINE preview claude-demo # value: claude
+   printf %s claude          | vercel env add VITE_ANALYSIS_ENGINE preview claude-demo -y
+   printf %s true            | vercel env add CLAUDE_ENABLED       preview claude-demo -y
+   printf %s claude-opus-4-8 | vercel env add ANTHROPIC_MODEL      preview claude-demo -y
+   node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))" \
+     | vercel env add LOG_SALT preview claude-demo --sensitive -y
    ```
-4. **Confirm production has none of them**: `vercel env ls` — no row may show a
-   Production target for any Claude variable.
-5. Confirm Deployment Protection is on (Standard Protection is the default and
-   covers preview/generated URLs).
-6. Redeploy the branch. Environment changes do not reach a running function
-   until it is rebuilt.
-7. Run the verification checklist below.
+4. Add the key **interactively**, so the value is never passed as an argument
+   and never lands in shell history:
+   ```bash
+   vercel env add ANTHROPIC_API_KEY preview claude-demo --sensitive
+   ```
+   Or via the dashboard: Environment = **Preview**, Git Branch = **`claude-demo`**,
+   **Sensitive** ticked. The branch field is not optional — without it the key
+   reaches *every* preview deployment.
+5. **Confirm production has none of them**: `vercel env ls` — every row must read
+   `Preview (claude-demo)`. No Claude variable may show a Production target.
+6. Confirm Deployment Protection is on (Standard Protection is the default and
+   covers preview and generated URLs, but **not** the production alias — see
+   *The two deployments*).
+7. **Push `claude-demo` to redeploy.** Environment changes reach a function only
+   when it is rebuilt, and only a push produces the branch alias.
+8. Run the verification checklist below.
 
 ### Verification checklist
 
