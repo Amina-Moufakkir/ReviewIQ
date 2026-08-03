@@ -83,6 +83,18 @@ export interface EstimatorConfig {
   distinctLabelRatio: number;
   /** Max labels one canonicalization request carries, before hierarchy. */
   maxLabelsPerCanonicalizationRequest: number;
+  /** Estimated input tokens per label sent to a canonicalization request. */
+  canonicalizationInputTokensPerLabel: number;
+  /** Estimated output tokens per label in the returned index groups. */
+  canonicalizationOutputTokensPerLabel: number;
+  /**
+   * Share of a chunk's labels that survive as representatives into the next
+   * level. Conservative: the less merging assumed, the more levels and the
+   * higher the cost, which is the direction a ceiling should err in.
+   */
+  representativeRatio: number;
+  /** Hierarchy depth beyond which the projection reports itself unsupported. */
+  maxCanonicalizationLevels: number;
   /** Fraction of batches assumed to be retried once. */
   retryAllowance: number;
   /** Measured streaming throughput, output tokens per second. */
@@ -118,6 +130,10 @@ export const DEFAULT_ESTIMATOR_CONFIG: EstimatorConfig = {
   // 13.5 distinct themes from 33 tags measured; rounded up for headroom.
   distinctLabelRatio: 0.5,
   maxLabelsPerCanonicalizationRequest: 300,
+  canonicalizationInputTokensPerLabel: 6,
+  canonicalizationOutputTokensPerLabel: 3,
+  representativeRatio: 0.6,
+  maxCanonicalizationLevels: 3,
   retryAllowance: 0.1,
   outputTokensPerSecond: 110,
   timeToFirstTokenMs: 1000,
@@ -154,10 +170,102 @@ export interface RunEstimate {
   conservativeBatchCount: number;
   cost: CostBreakdown;
   runtime: RuntimeRange;
+  /** Per-level canonicalization plan. Carries the `unsupported` flag callers must honour. */
+  canonicalization: CanonicalizationProjection;
   requiresConfirmation: boolean;
   /** True when the selection is larger than this environment permits at all. */
   exceedsCeiling: boolean;
   ceiling: EnvironmentCeiling;
+}
+
+// --- canonicalization projection ---------------------------------------------
+
+export interface CanonicalizationLevel {
+  /** 0-based depth. Level 0 sees the raw distinct labels. */
+  level: number;
+  /** Labels entering this level. */
+  inputLabels: number;
+  /** Requests this level needs, chunked by the per-request label bound. */
+  requests: number;
+  /** Concurrency waves within this level. Requests inside a level are independent. */
+  waves: number;
+  /** Labels leaving this level, and entering the next. */
+  representatives: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface CanonicalizationProjection {
+  levels: CanonicalizationLevel[];
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  /**
+   * True when the label set did not reduce to a single request within
+   * `maxCanonicalizationLevels`, either by hitting the depth cap or by reaching
+   * a fixed point where a level produces no fewer representatives than it
+   * consumed. Callers must treat this as unsupported rather than as a priced
+   * plan: the figures below account only for the levels actually projected.
+   */
+  unsupported: boolean;
+}
+
+/**
+ * Project canonicalization level by level.
+ *
+ * Every level pays for its OWN labels — the earlier model charged prompt
+ * overhead for a second level but counted label input and output tokens only
+ * once, for the original set, so a hierarchical run was systematically
+ * under-priced. Representatives passed upward are real tokens on the next
+ * request and are charged as such.
+ *
+ * Requests inside a level are independent and may run concurrently. Levels are
+ * not: level N+1 consumes level N's representatives, so it cannot start until
+ * level N finishes. That dependency is why runtime is summed across levels
+ * rather than divided by concurrency once.
+ */
+export function projectCanonicalization(
+  distinctLabels: number,
+  config: EstimatorConfig = DEFAULT_ESTIMATOR_CONFIG,
+): CanonicalizationProjection {
+  const levels: CanonicalizationLevel[] = [];
+  const empty = { levels, totalInputTokens: 0, totalOutputTokens: 0, unsupported: false };
+  if (distinctLabels <= 0) return empty;
+
+  let labels = distinctLabels;
+  let unsupported = true; // until a level resolves to a single request
+
+  for (let level = 0; level < config.maxCanonicalizationLevels; level++) {
+    const requests = Math.ceil(labels / config.maxLabelsPerCanonicalizationRequest);
+    const waves = Math.ceil(requests / config.concurrency);
+    const representatives = Math.ceil(labels * config.representativeRatio);
+
+    levels.push({
+      level,
+      inputLabels: labels,
+      requests,
+      waves,
+      representatives,
+      inputTokens:
+        labels * config.canonicalizationInputTokensPerLabel + requests * config.systemPromptTokens,
+      outputTokens: labels * config.canonicalizationOutputTokensPerLabel,
+    });
+
+    // A level that fits in one request is the final pass.
+    if (requests === 1) {
+      unsupported = false;
+      break;
+    }
+    // Fixed point: no reduction, so deeper levels would repeat forever.
+    if (representatives >= labels) break;
+    labels = representatives;
+  }
+
+  return {
+    levels,
+    totalInputTokens: levels.reduce((n, l) => n + l.inputTokens, 0),
+    totalOutputTokens: levels.reduce((n, l) => n + l.outputTokens, 0),
+    unsupported,
+  };
 }
 
 // --- projection --------------------------------------------------------------
@@ -208,25 +316,22 @@ function costOfTokens(inputTokens: number, outputTokens: number, c: EstimatorCon
   return (inputTokens / 1e6) * c.inputUsdPerMTok + (outputTokens / 1e6) * c.outputUsdPerMTok;
 }
 
-/**
- * Cost of the canonicalization pass, sized from the tags the run is expected to
- * emit. Labels only — this request never carries review text, which is why its
- * input is a function of label count rather than of selection bytes.
- */
-function canonicalizationCost(outputTokens: number, c: EstimatorConfig): number {
-  const tags = outputTokens / c.outputTokensPerTag;
-  const labels = Math.ceil(tags * c.distinctLabelRatio);
-  if (labels === 0) return 0;
+/** Distinct theme labels a run is expected to produce, for canonicalization sizing. */
+function expectedDistinctLabels(outputTokens: number, c: EstimatorConfig): number {
+  if (outputTokens <= 0) return 0;
+  return Math.ceil((outputTokens / c.outputTokensPerTag) * c.distinctLabelRatio);
+}
 
-  // Above the per-request bound the pass goes hierarchical: chunks, then a pass
-  // over the surviving representatives. Charged as both levels.
-  const chunks = Math.ceil(labels / c.maxLabelsPerCanonicalizationRequest);
-  const requests = chunks > 1 ? chunks + 1 : 1;
-
-  // ~6 input tokens per label, ~3 output tokens per label for the index groups.
-  const inputTokens = labels * 6 + requests * c.systemPromptTokens;
-  const outputTokensOut = labels * 3;
-  return costOfTokens(inputTokens, outputTokensOut, c);
+/** Wall-clock for a canonicalization projection: waves within a level, levels in sequence. */
+function canonicalizationRuntimeMs(
+  projection: CanonicalizationProjection,
+  c: EstimatorConfig,
+): number {
+  return projection.levels.reduce((ms, level) => {
+    const outputPerRequest = level.outputTokens / level.requests;
+    const perRequestMs = c.timeToFirstTokenMs + (outputPerRequest / c.outputTokensPerSecond) * 1000;
+    return ms + level.waves * perRequestMs;
+  }, 0);
 }
 
 /**
@@ -263,7 +368,16 @@ export function estimateRun(
     textBytes * config.inputTokensPerTextByte + conservativeBatchCount * config.systemPromptTokens;
 
   const taggingUsd = costOfTokens(inputTokens, outputTokens, config);
-  const canonicalizationUsd = canonicalizationCost(outputTokens, config);
+
+  // Every level pays for its own labels, including the representatives handed
+  // upward — those are real tokens on the next request.
+  const distinctLabels = expectedDistinctLabels(outputTokens, config);
+  const canonicalization = projectCanonicalization(distinctLabels, config);
+  const canonicalizationUsd = costOfTokens(
+    canonicalization.totalInputTokens,
+    canonicalization.totalOutputTokens,
+    config,
+  );
   // Retries re-run tagging work only; canonicalization runs once per run.
   const retryAllowanceUsd = taggingUsd * config.retryAllowance;
   const totalUsd = taggingUsd + canonicalizationUsd + retryAllowanceUsd;
@@ -276,13 +390,8 @@ export function estimateRun(
       : config.timeToFirstTokenMs + (perBatchOutputTokens / config.outputTokensPerSecond) * 1000;
   const waves = Math.ceil(projectedBatchCount / config.concurrency);
 
-  const canonicalizationLabels = Math.ceil(
-    (outputTokens / config.outputTokensPerTag) * config.distinctLabelRatio,
-  );
-  const canonicalizationMs =
-    canonicalizationLabels === 0
-      ? 0
-      : config.timeToFirstTokenMs + ((canonicalizationLabels * 3) / config.outputTokensPerSecond) * 1000;
+  // Levels run in sequence; requests within a level run concurrently.
+  const canonicalizationMs = canonicalizationRuntimeMs(canonicalization, config);
 
   const expectedMs = Math.round(waves * perBatchMs + canonicalizationMs);
 
@@ -292,6 +401,7 @@ export function estimateRun(
     textBytes,
     projectedBatchCount,
     conservativeBatchCount,
+    canonicalization,
     cost: {
       taggingUsd,
       canonicalizationUsd,
