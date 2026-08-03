@@ -4,7 +4,7 @@ import {
   beginPlan,
   nextBatch,
   observe,
-  seedDensity,
+  seedDensityEstimate,
   textBytesOf,
   checkCoverage,
   type Batch,
@@ -82,14 +82,14 @@ describe("exactly-once coverage", () => {
 
   it("reports missing, duplicated and reordered rows", () => {
     const input = rows(3);
-    expect(checkCoverage(input, [{ index: 0, rows: input.slice(0, 2), textBytes: 0 }])).toMatchObject(
+    expect(checkCoverage(input, [{ index: 0, rows: input.slice(0, 2), textBytes: 0, overByteGuard: false }])).toMatchObject(
       { missing: ["r2"] },
     );
     expect(
-      checkCoverage(input, [{ index: 0, rows: [...input, input[0]!], textBytes: 0 }]),
+      checkCoverage(input, [{ index: 0, rows: [...input, input[0]!], textBytes: 0, overByteGuard: false }]),
     ).toMatchObject({ duplicated: ["r0"] });
     expect(
-      checkCoverage(input, [{ index: 0, rows: [input[1]!, input[0]!, input[2]!], textBytes: 0 }]),
+      checkCoverage(input, [{ index: 0, rows: [input[1]!, input[0]!, input[2]!], textBytes: 0, overByteGuard: false }]),
     ).toMatchObject({ outOfOrder: true });
   });
 
@@ -137,6 +137,18 @@ describe("row and byte guards", () => {
     expect(checkCoverage(input, batches)).toBeNull();
     const hugeBatch = batches.find((b) => b.rows.some((r) => r.id === "huge"))!;
     expect(hugeBatch.rows).toHaveLength(1);
+    // Marked, not merely oversized: the executor must be able to refuse it
+    // before spending anything, without re-deriving the guard itself.
+    expect(hugeBatch.overByteGuard).toBe(true);
+    expect(hugeBatch.textBytes).toBeGreaterThan(DEFAULT_PLANNER_CONFIG.maxBatchTextBytes);
+  });
+
+  it("marks every dispatchable batch as within the byte guard", () => {
+    const batches = drain(beginPlan(rows(60, 2000)));
+    for (const b of batches) {
+      expect(b.overByteGuard).toBe(b.textBytes > DEFAULT_PLANNER_CONFIG.maxBatchTextBytes);
+    }
+    expect(batches.every((b) => !b.overByteGuard)).toBe(true);
   });
 
   it("never emits an empty batch", () => {
@@ -153,22 +165,22 @@ describe("seeded density", () => {
   // so it must land near the densities actually measured for each dataset shape.
   it("seeds near the measured ~405 tok/row for dense Amazon-shaped rows", () => {
     const dense = rows(5, 970); // ~4,851 bytes total, as measured
-    expect(seedDensity(dense)).toBeGreaterThan(360);
-    expect(seedDensity(dense)).toBeLessThan(440);
+    expect(seedDensityEstimate(dense)).toBeGreaterThan(360);
+    expect(seedDensityEstimate(dense)).toBeLessThan(440);
   });
 
   it("seeds near the measured ~136 tok/row for light synthetic rows", () => {
     const light = rows(25, 113); // ~2,825 bytes total, as measured
-    expect(seedDensity(light)).toBeGreaterThan(115);
-    expect(seedDensity(light)).toBeLessThan(160);
+    expect(seedDensityEstimate(light)).toBeGreaterThan(115);
+    expect(seedDensityEstimate(light)).toBeLessThan(160);
   });
 
   it("distinguishes the two, so a flat constant is not silently reintroduced", () => {
-    expect(seedDensity(rows(5, 970))).toBeGreaterThan(seedDensity(rows(25, 113)) * 2);
+    expect(seedDensityEstimate(rows(5, 970))).toBeGreaterThan(seedDensityEstimate(rows(25, 113)) * 2);
   });
 
   it("is zero for an empty selection rather than dividing by zero", () => {
-    expect(seedDensity([])).toBe(0);
+    expect(seedDensityEstimate([])).toBe(0);
   });
 });
 
@@ -242,6 +254,55 @@ describe("resizing", () => {
     result = observe(state, ok({ rows: state.rowsPerBatch, outputTokens: state.rowsPerBatch * 300, latencyMs: 9000 }));
     expect(["unchanged", "ewma"]).toContain(result.reason);
     if (result.state.rowsPerBatch === state.rowsPerBatch) expect(result.reason).toBe("unchanged");
+  });
+});
+
+// --- progress ----------------------------------------------------------------
+
+describe("cursor progress — no stall is possible", () => {
+  it("advances the cursor on every batch, even pinned at the minimum size", () => {
+    // Drive the size to 1 and keep it there with unending timeouts.
+    let state = beginPlan(rows(25, 10));
+    for (let i = 0; i < 10; i++) {
+      state = observe(state, ok({ rows: 1, outcome: "timeout", latencyMs: 30_000 })).state;
+    }
+    expect(state.rowsPerBatch).toBe(1);
+
+    let remaining = state.remaining.length;
+    let batches = 0;
+    for (;;) {
+      const step = nextBatch(state);
+      if (!step) break;
+      // Strictly monotonic: the cursor cannot fail to move.
+      expect(step.state.remaining.length).toBeLessThan(remaining);
+      remaining = step.state.remaining.length;
+      state = observe(step.state, ok({ rows: 1, outcome: "timeout", latencyMs: 30_000 })).state;
+      batches++;
+      if (batches > 100) throw new Error("stalled at minimum batch size");
+    }
+    expect(batches).toBe(25); // exactly one row per batch, all covered
+  });
+
+  it("terminates in exactly N batches when every batch fails", () => {
+    const input = rows(17, 10);
+    const batches = drain(beginPlan(input), (b) =>
+      ok({ rows: b.rows.length, outcome: "timeout", latencyMs: 30_000 }),
+    );
+    // Bounded terminal failure: the plan completes rather than looping. The
+    // executor decides the run has failed; the planner never traps it.
+    expect(checkCoverage(input, batches)).toBeNull();
+    expect(batches.length).toBeLessThanOrEqual(input.length);
+  });
+
+  it("always consumes at least one row, whatever the state claims", () => {
+    // A corrupted or hand-built state must still make progress rather than
+    // returning an empty batch forever.
+    const base = beginPlan(rows(5, 10));
+    for (const rowsPerBatch of [0, -1, Number.NaN]) {
+      const step = nextBatch({ ...base, rowsPerBatch })!;
+      expect(step.batch.rows.length).toBeGreaterThanOrEqual(1);
+      expect(step.state.remaining.length).toBeLessThan(base.remaining.length);
+    }
   });
 });
 

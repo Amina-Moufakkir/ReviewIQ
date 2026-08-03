@@ -68,6 +68,17 @@ export interface Batch {
   index: number;
   rows: IncomingReview[];
   textBytes: number;
+  /**
+   * True when this batch is over `maxBatchTextBytes`, which can only happen for
+   * a single row larger than the entire budget.
+   *
+   * The executor MUST refuse to dispatch such a batch and fail visibly, rather
+   * than send a request the endpoint would reject. The planner still emits the
+   * row — dropping it would strand it and break exactly-once coverage silently —
+   * but marks it so the decision is explicit at the boundary that spends money,
+   * rather than left to the executor to re-derive from `textBytes`.
+   */
+  overByteGuard: boolean;
 }
 
 /** Why the next batch size changed. The field that makes resize logs tunable. */
@@ -97,7 +108,7 @@ export interface PlanState {
   readonly remaining: readonly IncomingReview[];
   /** Index the next batch will carry. */
   readonly nextIndex: number;
-  /** EWMA of output tokens per row. */
+  /** EWMA ESTIMATE of output tokens per row. A projection, never a bound. */
   readonly density: number;
   /** EWMA of batch latency, or null before the first observation. */
   readonly latencyMs: number | null;
@@ -113,12 +124,27 @@ export function textBytesOf(rows: readonly IncomingReview[]): number {
   return rows.reduce((sum, r) => sum + encoder.encode(r.text).length, 0);
 }
 
+/**
+ * Clamp, with non-finite input collapsing to the low bound rather than
+ * propagating.
+ *
+ * `Math.min(hi, Math.max(lo, NaN))` is `NaN`, which would reach `slice(0, NaN)`
+ * and yield an empty batch — and an empty batch consumes no rows, so the plan
+ * would never terminate. A stall is the one failure mode here with no visible
+ * symptom and no recovery, so a non-finite size degrades to the smallest safe
+ * batch instead. Found by the progress test, not by reading the code.
+ */
 function clamp(value: number, lo: number, hi: number): number {
+  if (!Number.isFinite(value)) return lo;
   return Math.min(hi, Math.max(lo, value));
 }
 
 /**
- * Starting output-tokens-per-row for a selection.
+ * Starting ESTIMATE of output tokens per row for a selection.
+ *
+ * It is a projection from a two-point fit, not a guarantee about what the model
+ * will emit. Nothing downstream may treat it as a bound: it seeds the first
+ * batch and is superseded by measurement as soon as one batch reports back.
  *
  * Seeded from the validated byte-aware estimator rather than a flat constant,
  * because a constant would be wrong by ~3x on one dataset or the other: it
@@ -126,7 +152,7 @@ function clamp(value: number, lo: number, hi: number): number {
  * rows, matching what was measured for each. Once a real batch reports back,
  * measurement replaces this.
  */
-export function seedDensity(rows: readonly IncomingReview[]): number {
+export function seedDensityEstimate(rows: readonly IncomingReview[]): number {
   if (rows.length === 0) return 0;
   return estimateOutputTokens(rows.length, textBytesOf(rows)) / rows.length;
 }
@@ -148,7 +174,7 @@ export function beginPlan(
     config,
     remaining: [...rows],
     nextIndex: 0,
-    density: seedDensity(rows),
+    density: seedDensityEstimate(rows),
     latencyMs: null,
     // The first batch is deliberately small: it is the calibration measurement,
     // and it is batch 1 rather than an extra request.
@@ -184,7 +210,12 @@ export function nextBatch(state: PlanState): { batch: Batch; state: PlanState } 
   }
 
   return {
-    batch: { index: state.nextIndex, rows, textBytes: bytes },
+    batch: {
+      index: state.nextIndex,
+      rows,
+      textBytes: bytes,
+      overByteGuard: bytes > maxBatchTextBytes,
+    },
     state: {
       ...state,
       remaining: state.remaining.slice(rows.length),
