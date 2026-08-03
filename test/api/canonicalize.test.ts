@@ -262,6 +262,46 @@ describe("the request carries labels and nothing else", () => {
     expect(captured.status).toBe(200);
   });
 
+  it.each([
+    ["review text alongside the labels", { labels: LABELS, reviews: [{ id: "r1", text: "it died in a day" }] }],
+    ["a nested payload", { labels: LABELS, meta: { rows: [{ id: "r1", text: "the strap tore" }] } }],
+    ["a quotes field", { labels: LABELS, quotes: ["the strap tore"] }],
+    ["an unknown scalar", { labels: LABELS, productId: "B00XYZ" }],
+  ])("rejects %s rather than ignoring it", async (_name, body) => {
+    // Ignoring an unknown property would never forward it to the model, but it
+    // would accept review text into a labels-only endpoint: present in transit
+    // and in whatever the platform records. The contract is an exact key set.
+    const { r, captured } = res();
+    await handler(req(body), r);
+
+    expect(captured.status).toBe(400);
+    expect(errorCode(captured.body)).toBe("invalid_request");
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
+  it("does not echo a rejected property name or its value back to the caller", async () => {
+    const { r, captured } = res();
+    await handler(req({ labels: LABELS, customer_email: "a@example.com" }), r);
+
+    expect(errorMessage(captured.body)).not.toContain("customer_email");
+    expect(errorMessage(captured.body)).not.toContain("a@example.com");
+    expect(loggedLines().join("\n")).not.toContain("a@example.com");
+  });
+});
+
+// --- the size limit ----------------------------------------------------------
+
+describe("the payload size limit does not trust the caller", () => {
+  /** Within every character limit, far over the byte limit. */
+  function multibyteOverflow() {
+    return {
+      labels: Array.from(
+        { length: MAX_LABELS_PER_CANONICALIZATION_REQUEST },
+        (_, i) => `${String(i).padStart(4, "0")}${"測".repeat(MAX_LABEL_LENGTH - 4)}`,
+      ),
+    };
+  }
+
   it("rejects an oversized body by its declared length, before parsing it", async () => {
     const { r, captured } = res();
     await handler(
@@ -274,18 +314,63 @@ describe("the request carries labels and nothing else", () => {
     expect(mocks.stream).not.toHaveBeenCalled();
   });
 
-  it("ignores extra fields rather than forwarding them — review text cannot ride along", async () => {
-    mocks.stream.mockReturnValue(goodStream());
+  it("rejects an oversized body when Content-Length is absent entirely", async () => {
+    // The header is optional, so it cannot be the limit.
     const { r, captured } = res();
-    await handler(
-      req({ labels: LABELS, reviews: [{ id: "r1", text: "the battery died after two days" }] }),
-      r,
-    );
+    await handler(req(multibyteOverflow(), { headers: {} }), r);
+
+    expect(captured.status).toBe(413);
+    expect(errorCode(captured.body)).toBe("payload_too_large");
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized body when Content-Length understates it", async () => {
+    // The header is a claim by the caller, and a caller trying to exceed the
+    // limit is exactly the one who would misstate it.
+    const { r, captured } = res();
+    await handler(req(multibyteOverflow(), { headers: { "content-length": "12" } }), r);
+
+    expect(captured.status).toBe(413);
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
+  it.each([["a non-numeric value", "not-a-number"], ["an empty value", ""]])(
+    "still applies the real limit when Content-Length is %s",
+    async (_name, value) => {
+      const { r, captured } = res();
+      await handler(req(multibyteOverflow(), { headers: { "content-length": value } }), r);
+
+      expect(captured.status).toBe(413);
+      expect(mocks.stream).not.toHaveBeenCalled();
+    },
+  );
+
+  it("measures UTF-8 bytes, not characters", async () => {
+    const body = multibyteOverflow();
+    // A character count would clear the limit outright; the bytes do not.
+    expect(JSON.stringify(body).length).toBeLessThan(MAX_CANONICALIZATION_BODY_BYTES);
+
+    const { r, captured } = res();
+    await handler(req(body), r);
+    expect(captured.status).toBe(413);
+  });
+
+  it("accepts multibyte labels that fit, with no Content-Length at all", async () => {
+    mocks.stream.mockReturnValue(rawStream(JSON.stringify({ groups: [[0, 1], [2]] })));
+    const { r, captured } = res();
+    await handler(req({ labels: ["電池の持ち", "バッテリー", "着け心地"] }, { headers: {} }), r);
 
     expect(captured.status).toBe(200);
-    const sent = JSON.stringify(mocks.stream.mock.calls[0]?.[0]);
-    expect(sent).not.toContain("the battery died after two days");
-    expect(sent).not.toContain("r1");
+    expect(captured.body).toEqual({ groups: [[0, 1], [2]] });
+  });
+
+  it("accepts an ordinary valid request unchanged", async () => {
+    mocks.stream.mockReturnValue(goodStream());
+    const { r, captured } = res();
+    await handler(req({ labels: LABELS }, { headers: { "content-length": "64" } }), r);
+
+    expect(captured.status).toBe(200);
+    expect(mocks.stream).toHaveBeenCalledTimes(1);
   });
 
   it("sends every given label to the provider and nothing more", async () => {

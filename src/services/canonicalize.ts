@@ -38,7 +38,13 @@ export const MAX_LABELS_PER_CANONICALIZATION_REQUEST = 300;
  */
 export const MAX_LABEL_LENGTH = 120;
 
-/** Total request bytes, a secondary guard on many short labels. */
+/**
+ * Total request size in UTF-8 bytes, a secondary guard on many short labels.
+ *
+ * Not redundant with the count and length limits, because those count UTF-16
+ * characters: 300 labels of 120 CJK characters each satisfies both and still
+ * weighs over 100KB on the wire. Bytes are what the request actually costs.
+ */
 export const MAX_CANONICALIZATION_BODY_BYTES = 64 * 1024;
 
 /** Hierarchy depth beyond which the caller must give up rather than loop. */
@@ -51,39 +57,92 @@ export interface CanonicalizeRequest {
   labels: string[];
 }
 
+export type ParsedCanonicalizeRequest =
+  | { ok: true; labels: string[] }
+  | { ok: false; reason: "invalid_request" | "payload_too_large"; message: string };
+
+/** UTF-8 byte length. `TextEncoder`, not `Buffer` — this module also runs in the browser. */
+export function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
 /**
  * Validate and narrow an inbound body to its label list.
  *
- * Returns the labels, or `{ invalid: <reason> }` naming the first contract
- * violation. Reasons describe shape only and carry nothing sensitive.
+ * "Labels only, never review text" is enforced here structurally rather than
+ * by convention, because a caller can put anything in a JSON body:
+ *
+ *  - **Only `labels` may appear at the top level.** Ignoring unknown properties
+ *    would let review text, ids, or quotes ride along in the request — never
+ *    forwarded to the model, but accepted, logged by the platform, and present
+ *    in transit. An exact key set is the only version of this contract that a
+ *    reviewer can check by reading it.
+ *  - **Every label is bounded in length**, so a review body cannot pose as one.
+ *  - **The whole payload is bounded in UTF-8 bytes**, measured from the parsed
+ *    body rather than a header the caller controls.
+ *
+ * Returns the labels, or the first contract violation with the status class it
+ * belongs to. Messages state the rule and never echo the offending value —
+ * caller-supplied strings are not reflected back.
  */
-export function parseCanonicalizeRequest(body: unknown): string[] | { invalid: string } {
-  if (typeof body !== "object" || body === null) return { invalid: "body must be a JSON object" };
+export function parseCanonicalizeRequest(body: unknown): ParsedCanonicalizeRequest {
+  const bad = (message: string): ParsedCanonicalizeRequest => ({
+    ok: false,
+    reason: "invalid_request",
+    message,
+  });
+
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return bad("body must be a JSON object");
+  }
+
+  // An exact key set, not a superset: nothing but labels may be sent.
+  const keys = Object.keys(body as Record<string, unknown>);
+  if (keys.some((key) => key !== "labels")) {
+    return bad("body must contain the labels property and nothing else");
+  }
+
+  // Authoritative size check. Content-Length is a caller-supplied claim; this
+  // measures what actually arrived. Re-serializing bounds the payload rather
+  // than reproducing the wire bytes exactly — insignificant whitespace is not
+  // preserved — which is the right direction for a limit.
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(body) ?? "";
+  } catch {
+    return bad("body must be a JSON object");
+  }
+  if (utf8ByteLength(serialized) > MAX_CANONICALIZATION_BODY_BYTES) {
+    return {
+      ok: false,
+      reason: "payload_too_large",
+      message: `the request body must be at most ${MAX_CANONICALIZATION_BODY_BYTES} bytes`,
+    };
+  }
+
   const raw = (body as { labels?: unknown }).labels;
   if (!Array.isArray(raw) || raw.length === 0) {
-    return { invalid: "labels must be a non-empty array" };
+    return bad("labels must be a non-empty array");
   }
   if (raw.length > MAX_LABELS_PER_CANONICALIZATION_REQUEST) {
-    return {
-      invalid: `at most ${MAX_LABELS_PER_CANONICALIZATION_REQUEST} labels per request`,
-    };
+    return bad(`at most ${MAX_LABELS_PER_CANONICALIZATION_REQUEST} labels per request`);
   }
 
   const labels: string[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
     if (typeof item !== "string" || item.trim() === "") {
-      return { invalid: "each label must be a non-blank string" };
+      return bad("each label must be a non-blank string");
     }
     if (item.length > MAX_LABEL_LENGTH) {
       // The guard that keeps review text out of a labels-only endpoint.
-      return { invalid: `each label must be at most ${MAX_LABEL_LENGTH} characters` };
+      return bad(`each label must be at most ${MAX_LABEL_LENGTH} characters`);
     }
-    if (seen.has(item)) return { invalid: `duplicate label: ${item}` };
+    if (seen.has(item)) return bad("labels must not repeat");
     seen.add(item);
     labels.push(item);
   }
-  return labels;
+  return { ok: true, labels };
 }
 
 // --- grouping validation -----------------------------------------------------
@@ -247,58 +306,140 @@ export async function canonicalizeLabels(
 ): Promise<CanonicalizationResult> {
   const maxLevels = options.maxLevels ?? MAX_CANONICALIZATION_LEVELS;
   const maxPerRequest = options.maxPerRequest ?? MAX_LABELS_PER_CANONICALIZATION_REQUEST;
-  const signal = options.signal ?? new AbortController().signal;
 
   const distinct = [...new Set(labels)];
   if (distinct.length === 0) {
     return { levels: [], map: new Map(), canonicalLabels: [] };
   }
 
-  const levels: CanonicalizationLevelResult[] = [];
-  let current = distinct;
-
-  for (let level = 0; level < maxLevels; level++) {
-    if (signal.aborted) throw new CanonicalizationError("aborted", "Canonicalization was cancelled.");
-
-    const chunks =
-      current.length <= maxPerRequest ? [[...current]] : chunkLabels(current, maxPerRequest);
-
-    // Chunks are independent; levels are not.
-    const outcomes = await Promise.all(chunks.map((chunk) => dispatch(chunk, signal)));
-
-    const levelMap = new Map<string, string>();
-    const representatives: string[] = [];
-    chunks.forEach((chunk, i) => {
-      const problem = validateGrouping(outcomes[i]!.groups, chunk.length);
-      if (problem) {
-        throw new CanonicalizationError("invalid_grouping", `Level ${level}: ${problem}`);
-      }
-      const map = applyGrouping(chunk, outcomes[i]!.groups);
-      for (const [from, to] of map) {
-        levelMap.set(from, to);
-        if (from === to) representatives.push(to);
-      }
-    });
-
-    levels.push({ level, inputLabels: current, representatives, map: levelMap });
-
-    if (chunks.length === 1) {
-      const map = composeMappings(distinct, levels);
-      return { levels, map, canonicalLabels: canonicalOrder(distinct, map) };
-    }
-    if (representatives.length >= current.length) {
-      throw new CanonicalizationError(
-        "unsupported",
-        `Level ${level} merged nothing: ${representatives.length} representatives from ${current.length} labels.`,
-      );
-    }
-    current = representatives;
+  // A run-level controller, linked to the caller's. Chunks within a level are
+  // concurrent and a level is all-or-nothing, so the moment one chunk fails the
+  // rest are already worthless — leaving them running bills the account for
+  // results that will be discarded. Aborting through a controller this run owns
+  // also means the caller's signal is never itself aborted.
+  const run = new AbortController();
+  const external = options.signal;
+  const linkAbort = () => run.abort();
+  if (external?.aborted) {
+    throw new CanonicalizationError("aborted", "Canonicalization was cancelled.");
   }
+  external?.addEventListener("abort", linkAbort, { once: true });
 
-  throw new CanonicalizationError(
-    "unsupported",
-    `Labels did not reduce to a single request within ${maxLevels} levels.`,
-  );
+  try {
+    const levels: CanonicalizationLevelResult[] = [];
+    let current = distinct;
+
+    for (let level = 0; level < maxLevels; level++) {
+      // Levels are sequential, so a cancellation between them stops the next
+      // one from ever dispatching.
+      if (run.signal.aborted) {
+        throw new CanonicalizationError("aborted", "Canonicalization was cancelled.");
+      }
+
+      const chunks =
+        current.length <= maxPerRequest ? [[...current]] : chunkLabels(current, maxPerRequest);
+
+      // Chunks are independent; levels are not. Validation happens inside the
+      // per-chunk task so that a grouping failure aborts its siblings just as a
+      // transport failure does — both make the level unusable.
+      const settled = await Promise.allSettled(
+        chunks.map(async (chunk) => {
+          try {
+            const outcome = await dispatch(chunk, run.signal);
+            const problem = validateGrouping(outcome.groups, chunk.length);
+            if (problem) {
+              throw new CanonicalizationError("invalid_grouping", `Level ${level}: ${problem}`);
+            }
+            return outcome;
+          } catch (err) {
+            run.abort();
+            throw err;
+          }
+        }),
+      );
+
+      // `allSettled` rather than `all`: it lets every sibling finish unwinding
+      // before this function returns, so no dispatch is still in flight
+      // afterwards, and it surfaces the true cause rather than whichever
+      // rejection happened to settle first.
+      const failures = settled.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+      if (failures.length > 0) {
+        throw chooseCause(failures, level, external?.aborted === true);
+      }
+
+      const outcomes = settled.map((r) => (r as PromiseFulfilledResult<GroupingOutcome>).value);
+      const levelMap = new Map<string, string>();
+      const representatives: string[] = [];
+      chunks.forEach((chunk, i) => {
+        const map = applyGrouping(chunk, outcomes[i]!.groups);
+        for (const [from, to] of map) {
+          levelMap.set(from, to);
+          if (from === to) representatives.push(to);
+        }
+      });
+
+      levels.push({ level, inputLabels: current, representatives, map: levelMap });
+
+      if (chunks.length === 1) {
+        const map = composeMappings(distinct, levels);
+        return { levels, map, canonicalLabels: canonicalOrder(distinct, map) };
+      }
+      if (representatives.length >= current.length) {
+        throw new CanonicalizationError(
+          "unsupported",
+          `Level ${level} merged nothing: ${representatives.length} representatives from ${current.length} labels.`,
+        );
+      }
+      current = representatives;
+    }
+
+    throw new CanonicalizationError(
+      "unsupported",
+      `Labels did not reduce to a single request within ${maxLevels} levels.`,
+    );
+  } finally {
+    external?.removeEventListener("abort", linkAbort);
+  }
+}
+
+/** True for the rejection a cancelled request raises, in either common form. */
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+/**
+ * Pick the failure that explains the run, and normalize it.
+ *
+ * When one chunk fails, its siblings are aborted and reject too — but those
+ * rejections are consequences, not causes. Reporting one of them would tell the
+ * user "cancelled" when the truth is "the grouping was invalid", so a real
+ * failure always outranks an abort. Anything that is not already a
+ * `CanonicalizationError` came from the transport and becomes `provider`.
+ */
+function chooseCause(
+  failures: readonly unknown[],
+  level: number,
+  externalAborted: boolean,
+): CanonicalizationError {
+  const normalized = failures.map((err) => {
+    if (err instanceof CanonicalizationError) return err;
+    if (isAbortError(err)) {
+      return new CanonicalizationError("aborted", "Canonicalization was cancelled.");
+    }
+    // Deliberately not the transport's own message: it can carry a URL, a
+    // provider error string, or a status the user cannot act on.
+    return new CanonicalizationError("provider", `Level ${level}: the grouping request failed.`);
+  });
+
+  // The caller cancelling outranks everything — the run stopped because they
+  // asked, and no other failure is worth reporting over that.
+  if (externalAborted) {
+    return (
+      normalized.find((e) => e.reason === "aborted") ??
+      new CanonicalizationError("aborted", "Canonicalization was cancelled.")
+    );
+  }
+  return normalized.find((e) => e.reason !== "aborted") ?? normalized[0]!;
 }
 
 /** Canonical labels in first-appearance order of the original input. */

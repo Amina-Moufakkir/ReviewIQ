@@ -19,13 +19,17 @@ export const config = { maxDuration: 60 };
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-4-8";
 
 /**
- * Read at call time, not at module load.
+ * The same fail-closed kill switch as `/api/analyze`, for the same reason: this
+ * is a second paid endpoint, and every way of getting the variable wrong should
+ * land on "disabled" rather than "spending".
  *
- * Vercel resolves environment variables per invocation, so a flipped kill
- * switch takes effect on the next request within a warm instance. It does NOT
- * mean the deployment picks up a value changed in the dashboard — that still
- * requires a redeploy; it means the handler never caches a stale read of its
- * own.
+ * Read per request rather than at module load — but NOT because that makes a
+ * dashboard change take effect sooner. On Vercel the environment is fixed for
+ * the life of a deployment: `process.env` cannot change under a running
+ * function, and editing the variable has no effect on any request until the
+ * project is redeployed. Reading it here buys deterministic behavior in tests
+ * and under `vercel dev`, where the process environment genuinely can differ
+ * between calls.
  */
 function claudeEnabled(): boolean {
   return process.env.CLAUDE_ENABLED === "true";
@@ -63,16 +67,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return fail(503, "analysis_disabled", "AI analysis is temporarily unavailable.");
   }
 
+  // A cheap early reject on the caller's own claim. It is not the size limit —
+  // Content-Length can be absent or simply untrue, so the authoritative check
+  // runs against the parsed body below and this only saves work when the header
+  // happens to be honest.
   const declaredLength = Number(req.headers["content-length"] ?? "");
   if (Number.isFinite(declaredLength) && declaredLength > MAX_CANONICALIZATION_BODY_BYTES) {
     return fail(413, "payload_too_large", "The request body is too large.");
   }
 
   const parsed = parseCanonicalizeRequest(req.body);
-  if (!Array.isArray(parsed)) {
-    return fail(400, "invalid_request", parsed.invalid, { labelCount: 0 });
+  if (!parsed.ok) {
+    return parsed.reason === "payload_too_large"
+      ? fail(413, "payload_too_large", "The request body is too large.", { labelCount: 0 })
+      : fail(400, "invalid_request", parsed.message, { labelCount: 0 });
   }
-  const labels = parsed;
+  const labels = parsed.labels;
   const shape: Partial<LogFields> = { labelCount: labels.length, model: MODEL };
 
   if (!process.env.ANTHROPIC_API_KEY) {
