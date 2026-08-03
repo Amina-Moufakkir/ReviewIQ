@@ -198,7 +198,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       inputTokens: message.usage?.input_tokens,
       outputTokens: message.usage?.output_tokens,
     });
-    res.status(200).json({ tags: outcome.valid.map(toRawTag) });
+    // Usage travels with the response, not only into the log.
+    //
+    // The client-side planner sizes the next batch from an EWMA of measured
+    // output tokens per row. Without a real number it folds in zero, the density
+    // estimate collapses, and batches ramp to the maximum the server accepts
+    // regardless of how dense the rows actually are — the exact condition that
+    // produced the measured timeouts batching exists to avoid.
+    //
+    // These are aggregate counts, not content: they say how much was written,
+    // never what. `usage` may be absent if the provider omitted it, so the
+    // client must treat it as optional rather than assume it.
+    res.status(200).json({
+      tags: outcome.valid.map(toRawTag),
+      usage: {
+        inputTokens: message.usage?.input_tokens,
+        outputTokens: message.usage?.output_tokens,
+      },
+    });
   } catch (err) {
     const { status, code, message, note } = classifyProviderError(err, controller.signal.aborted);
     return fail(status, code, message, { ...shape, providerNote: note });
