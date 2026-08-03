@@ -3,6 +3,8 @@ import {
   MAX_LABELS_PER_CANONICALIZATION_REQUEST,
   MAX_LABEL_LENGTH,
   MAX_CANONICALIZATION_LEVELS,
+  MAX_CANONICALIZATION_BODY_BYTES,
+  utf8ByteLength,
   parseCanonicalizeRequest,
   validateGrouping,
   applyGrouping,
@@ -26,12 +28,23 @@ import {
 
 // --- request validation ------------------------------------------------------
 
+/** Assert a parse succeeded, and hand back the labels. */
+function accepted(body: unknown): string[] {
+  const result = parseCanonicalizeRequest(body);
+  expect(result.ok).toBe(true);
+  return (result as { ok: true; labels: string[] }).labels;
+}
+
+/** Assert a parse failed, and hand back the failure. */
+function rejected(body: unknown): { reason: string; message: string } {
+  const result = parseCanonicalizeRequest(body);
+  expect(result.ok).toBe(false);
+  return result as { ok: false; reason: string; message: string };
+}
+
 describe("parseCanonicalizeRequest", () => {
   it("returns the labels when the body satisfies the contract", () => {
-    expect(parseCanonicalizeRequest({ labels: ["Battery life", "Comfort"] })).toEqual([
-      "Battery life",
-      "Comfort",
-    ]);
+    expect(accepted({ labels: ["Battery life", "Comfort"] })).toEqual(["Battery life", "Comfort"]);
   });
 
   it.each([
@@ -39,7 +52,7 @@ describe("parseCanonicalizeRequest", () => {
     ["null", null],
     ["an array body", ["Battery"]],
   ])("rejects %s", (_name, body) => {
-    expect(parseCanonicalizeRequest(body)).toHaveProperty("invalid");
+    expect(rejected(body).reason).toBe("invalid_request");
   });
 
   it.each([
@@ -50,32 +63,110 @@ describe("parseCanonicalizeRequest", () => {
     ["a blank entry", { labels: [" \t "] }],
     ["a duplicate entry", { labels: ["Battery", "Battery"] }],
   ])("rejects %s", (_name, body) => {
-    expect(parseCanonicalizeRequest(body)).toHaveProperty("invalid");
+    expect(rejected(body).reason).toBe("invalid_request");
   });
 
   it("rejects a label one character past the limit and accepts one at it", () => {
     const atLimit = "x".repeat(MAX_LABEL_LENGTH);
-    expect(parseCanonicalizeRequest({ labels: [atLimit] })).toEqual([atLimit]);
-    expect(parseCanonicalizeRequest({ labels: [atLimit + "x"] })).toHaveProperty("invalid");
+    expect(accepted({ labels: [atLimit] })).toEqual([atLimit]);
+    expect(rejected({ labels: [atLimit + "x"] }).reason).toBe("invalid_request");
   });
 
   it("rejects one label past the count limit and accepts the limit itself", () => {
     const atLimit = Array.from({ length: MAX_LABELS_PER_CANONICALIZATION_REQUEST }, (_, i) => `t${i}`);
-    expect(parseCanonicalizeRequest({ labels: atLimit })).toHaveLength(atLimit.length);
-    expect(parseCanonicalizeRequest({ labels: [...atLimit, "one more"] })).toHaveProperty("invalid");
+    expect(accepted({ labels: atLimit })).toHaveLength(atLimit.length);
+    expect(rejected({ labels: [...atLimit, "one more"] }).reason).toBe("invalid_request");
   });
 
   it("names the violated rule without echoing a long value back", () => {
-    const result = parseCanonicalizeRequest({ labels: ["y".repeat(MAX_LABEL_LENGTH + 1)] }) as {
-      invalid: string;
-    };
-    expect(result.invalid).toContain(String(MAX_LABEL_LENGTH));
-    expect(result.invalid).not.toContain("yyyyyyyyyy");
+    const result = rejected({ labels: ["y".repeat(MAX_LABEL_LENGTH + 1)] });
+    expect(result.message).toContain(String(MAX_LABEL_LENGTH));
+    expect(result.message).not.toContain("yyyyyyyyyy");
+  });
+
+  it("names the rule without echoing a duplicate label back", () => {
+    const result = rejected({ labels: ["Battery life", "Battery life"] });
+    expect(result.message).not.toContain("Battery life");
   });
 
   it("preserves the caller's order, which the index groups refer to", () => {
     const labels = ["Zip quality", "Battery life", "Aroma"];
-    expect(parseCanonicalizeRequest({ labels })).toEqual(labels);
+    expect(accepted({ labels })).toEqual(labels);
+  });
+});
+
+// --- the exact-key-set contract ----------------------------------------------
+
+describe("only the labels property may be sent", () => {
+  it.each([
+    ["review text alongside the labels", { labels: ["Battery"], reviews: ["it died in a day"] }],
+    ["a nested payload", { labels: ["Battery"], meta: { rows: [{ id: "r1", text: "broke" }] } }],
+    ["a quotes field", { labels: ["Battery"], quotes: ["the strap tore"] }],
+    ["a single unknown scalar", { labels: ["Battery"], productId: "B00XYZ" }],
+    ["an unknown property and no labels", { reviews: ["it died in a day"] }],
+  ])("rejects %s", (_name, body) => {
+    // Ignoring these would never forward them to the model, but it would accept
+    // review text into a labels-only endpoint: present in transit, and in
+    // whatever the platform records about the request.
+    expect(rejected(body).reason).toBe("invalid_request");
+  });
+
+  it("rejects an unknown property even when the labels themselves are valid", () => {
+    expect(accepted({ labels: ["Battery"] })).toEqual(["Battery"]);
+    expect(rejected({ labels: ["Battery"], extra: 1 }).reason).toBe("invalid_request");
+  });
+
+  it("states the rule without echoing the rejected property name", () => {
+    const result = rejected({ labels: ["Battery"], customer_email: "a@example.com" });
+    expect(result.message).not.toContain("customer_email");
+    expect(result.message).not.toContain("a@example.com");
+  });
+});
+
+// --- the byte limit ----------------------------------------------------------
+
+describe("the payload is bounded in UTF-8 bytes", () => {
+  /** A body that satisfies every count and character limit yet is far too large. */
+  function multibyteOverflow() {
+    return {
+      labels: Array.from(
+        { length: MAX_LABELS_PER_CANONICALIZATION_REQUEST },
+        // 3 UTF-8 bytes per character, and unique so the duplicate rule passes.
+        (_, i) => `${String(i).padStart(4, "0")}${"測".repeat(MAX_LABEL_LENGTH - 4)}`,
+      ),
+    };
+  }
+
+  it("rejects a body that is within every character limit but over the byte limit", () => {
+    const body = multibyteOverflow();
+    // Every character-counted rule passes...
+    expect(body.labels).toHaveLength(MAX_LABELS_PER_CANONICALIZATION_REQUEST);
+    for (const label of body.labels) expect(label.length).toBeLessThanOrEqual(MAX_LABEL_LENGTH);
+    // ...and a naive character count would clear the limit outright.
+    expect(JSON.stringify(body).length).toBeLessThan(MAX_CANONICALIZATION_BODY_BYTES);
+    // But the real cost is over 100KB.
+    expect(utf8ByteLength(JSON.stringify(body))).toBeGreaterThan(MAX_CANONICALIZATION_BODY_BYTES);
+
+    expect(rejected(body).reason).toBe("payload_too_large");
+  });
+
+  it("accepts multibyte labels that fit", () => {
+    expect(accepted({ labels: ["電池の持ち", "着け心地", "Battery life"] })).toHaveLength(3);
+  });
+
+  it("counts bytes rather than characters", () => {
+    expect(utf8ByteLength("測")).toBe(3);
+    expect(utf8ByteLength("é")).toBe(2);
+    expect(utf8ByteLength("a")).toBe(1);
+    // A surrogate pair is one code point, two UTF-16 units, four bytes.
+    expect("🔋".length).toBe(2);
+    expect(utf8ByteLength("🔋")).toBe(4);
+  });
+
+  it("classifies an oversized body as payload_too_large, not a shape error", () => {
+    // The distinction the endpoint turns into 413 rather than 400: the caller
+    // sent something well-formed, only too big.
+    expect(rejected(multibyteOverflow()).reason).toBe("payload_too_large");
   });
 });
 
@@ -404,12 +495,28 @@ describe("canonicalizeLabels", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("passes the signal through so an in-flight request can be cancelled", async () => {
+  it("passes a live signal to each dispatch", async () => {
     const controller = new AbortController();
     const dispatch = vi.fn(identityDispatch);
     await canonicalizeLabels(["a"], dispatch, { signal: controller.signal });
 
-    expect(dispatch.mock.calls[0]?.[1]).toBe(controller.signal);
+    const passed = dispatch.mock.calls[0]?.[1];
+    expect(passed).toBeInstanceOf(AbortSignal);
+    expect(passed!.aborted).toBe(false);
+  });
+
+  it("does not abort the caller's own signal, only its own run", async () => {
+    // The caller may reuse their signal for the rest of the analysis; a failure
+    // in here must not cancel that.
+    const controller = new AbortController();
+    const failing: CanonicalizeDispatch = async () => {
+      throw new Error("transport exploded");
+    };
+    await expect(
+      canonicalizeLabels(["a", "b"], failing, { signal: controller.signal }),
+    ).rejects.toBeInstanceOf(CanonicalizationError);
+
+    expect(controller.signal.aborted).toBe(false);
   });
 
   it("defaults the level cap to the documented constant", async () => {
@@ -420,5 +527,217 @@ describe("canonicalizeLabels", () => {
     // what matters is that no more than MAX_CANONICALIZATION_LEVELS run.
     await canonicalizeLabels(["a"], dispatch).catch(() => {});
     expect(dispatch.mock.calls.length).toBeLessThanOrEqual(MAX_CANONICALIZATION_LEVELS);
+  });
+});
+
+// --- one chunk fails, the whole run stops ------------------------------------
+
+/** An AbortError of the shape a cancelled request raises. */
+function abortError(): Error {
+  const err = new Error("aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+/**
+ * A dispatch where one chunk fails and the rest hang until cancelled.
+ *
+ * The hanging is what makes the test meaningful: siblings are still in flight
+ * when the failure lands, so anything that fails to abort them leaves real
+ * requests running and billable.
+ */
+function siblingHarness(
+  failOn: (chunk: string[]) => unknown | undefined,
+  { hangMs = 2000 } = {},
+) {
+  const signals: AbortSignal[] = [];
+  const completed: string[][] = [];
+
+  const dispatch = vi.fn(async (chunk: string[], signal: AbortSignal) => {
+    signals.push(signal);
+    const failure = failOn(chunk);
+    if (failure !== undefined) throw failure;
+
+    await new Promise<void>((resolve) => {
+      if (signal.aborted) return resolve();
+      signal.addEventListener("abort", () => resolve(), { once: true });
+      setTimeout(resolve, hangMs);
+    });
+    if (signal.aborted) throw abortError();
+
+    completed.push(chunk);
+    return { groups: chunk.map((_, i) => [i]) };
+  });
+
+  return { dispatch, signals, completed };
+}
+
+describe("a failed chunk aborts its siblings", () => {
+  const LABELS4 = ["a", "b", "c", "d"];
+
+  it("aborts in-flight siblings when a chunk's transport fails", async () => {
+    const h = siblingHarness((chunk) => (chunk.includes("a") ? new Error("socket reset") : undefined));
+
+    await expect(
+      canonicalizeLabels(LABELS4, h.dispatch, { maxPerRequest: 2 }),
+    ).rejects.toBeInstanceOf(CanonicalizationError);
+
+    // Both chunks were genuinely started, so this is not passing by never
+    // reaching the sibling.
+    expect(h.dispatch).toHaveBeenCalledTimes(2);
+    expect(h.signals).toHaveLength(2);
+    for (const signal of h.signals) expect(signal.aborted).toBe(true);
+    expect(h.completed).toEqual([]);
+  });
+
+  it("aborts in-flight siblings when a chunk's grouping fails validation", async () => {
+    // A grouping failure makes the level just as unusable as a dead socket.
+    const bad: CanonicalizeDispatch = async (chunk, signal) => {
+      if (chunk.includes("a")) return { groups: [[0]] }; // drops a label
+      await new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+        setTimeout(resolve, 2000);
+      });
+      if (signal.aborted) throw abortError();
+      return { groups: chunk.map((_, i) => [i]) };
+    };
+    const dispatch = vi.fn(bad);
+
+    await expect(
+      canonicalizeLabels(LABELS4, dispatch, { maxPerRequest: 2 }),
+    ).rejects.toMatchObject({ reason: "invalid_grouping" });
+
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls.every(([, signal]) => signal.aborted)).toBe(true);
+  });
+
+  it("aborts siblings on failure even when the caller supplied a signal", async () => {
+    // Dispatches must run on the signal this run owns, not the caller's.
+    // Handing the caller's signal down would look correct — cancellation still
+    // works — while quietly losing sibling abort, since a chunk failure has no
+    // way to abort a signal it does not control.
+    const controller = new AbortController();
+    const h = siblingHarness((chunk) => (chunk.includes("a") ? new Error("socket reset") : undefined));
+
+    await expect(
+      canonicalizeLabels(LABELS4, h.dispatch, { maxPerRequest: 2, signal: controller.signal }),
+    ).rejects.toBeInstanceOf(CanonicalizationError);
+
+    for (const signal of h.signals) expect(signal.aborted).toBe(true);
+    expect(h.completed).toEqual([]);
+    // And the caller's signal is still theirs to use.
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it("reports the real cause, not the cancellations it triggered", async () => {
+    // The siblings all reject with AbortError, and one of them can settle
+    // first. Reporting that would tell the user "cancelled" when nothing was.
+    const h = siblingHarness((chunk) => (chunk.includes("c") ? new Error("socket reset") : undefined));
+
+    await expect(
+      canonicalizeLabels(LABELS4, h.dispatch, { maxPerRequest: 2 }),
+    ).rejects.toMatchObject({ reason: "provider" });
+  });
+
+  it("normalizes a transport rejection to provider without forwarding its text", async () => {
+    const dispatch: CanonicalizeDispatch = async () => {
+      throw new TypeError("Failed to fetch https://api.example.com/v1/internal?key=abc");
+    };
+    const error = await canonicalizeLabels(["a", "b"], dispatch).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(CanonicalizationError);
+    expect((error as CanonicalizationError).reason).toBe("provider");
+    expect((error as Error).message).not.toContain("api.example.com");
+    expect((error as Error).message).not.toContain("key=abc");
+  });
+
+  it("never starts a later level after a failure", async () => {
+    // 8 labels at 2 per request is 4 chunks at level 0, and would reduce to
+    // further levels if it succeeded. A failure must end the run there.
+    const labels = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    const h = siblingHarness((chunk) => (chunk.includes("a") ? new Error("socket reset") : undefined));
+
+    await expect(
+      canonicalizeLabels(labels, h.dispatch, { maxPerRequest: 2, maxLevels: 3 }),
+    ).rejects.toBeInstanceOf(CanonicalizationError);
+
+    expect(h.dispatch).toHaveBeenCalledTimes(4); // level 0 only
+  });
+
+  it("leaves no dispatch in flight once it rejects", async () => {
+    const h = siblingHarness((chunk) => (chunk.includes("a") ? new Error("socket reset") : undefined));
+
+    await expect(
+      canonicalizeLabels(LABELS4, h.dispatch, { maxPerRequest: 2 }),
+    ).rejects.toBeInstanceOf(CanonicalizationError);
+
+    // Every sibling has already unwound by the time the caller sees the
+    // rejection — nothing is still running behind a settled promise.
+    expect(h.signals.every((s) => s.aborted)).toBe(true);
+    expect(h.completed).toEqual([]);
+  });
+
+  it("returns no partial result — the run is all or nothing", async () => {
+    const h = siblingHarness((chunk) => (chunk.includes("a") ? new Error("socket reset") : undefined));
+    const outcome = await canonicalizeLabels(LABELS4, h.dispatch, { maxPerRequest: 2 }).then(
+      (r) => ({ resolved: r }),
+      (e: unknown) => ({ rejected: e }),
+    );
+
+    expect(outcome).not.toHaveProperty("resolved");
+    expect((outcome as { rejected: unknown }).rejected).toBeInstanceOf(CanonicalizationError);
+  });
+});
+
+describe("caller cancellation", () => {
+  it("cancels in-flight dispatches and reports the run as cancelled", async () => {
+    const controller = new AbortController();
+    const h = siblingHarness(() => undefined);
+
+    const promise = canonicalizeLabels(["a", "b", "c", "d"], h.dispatch, {
+      maxPerRequest: 2,
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({ reason: "aborted" });
+    expect(h.signals).toHaveLength(2);
+    for (const signal of h.signals) expect(signal.aborted).toBe(true);
+    expect(h.completed).toEqual([]);
+  });
+
+  it("reports cancellation even when a chunk also failed on its own", async () => {
+    // The caller asked to stop; that is the honest explanation, and no
+    // incidental failure is worth reporting over it.
+    const controller = new AbortController();
+    const h = siblingHarness((chunk) => (chunk.includes("a") ? new Error("socket reset") : undefined));
+
+    const promise = canonicalizeLabels(["a", "b", "c", "d"], h.dispatch, {
+      maxPerRequest: 2,
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({ reason: "aborted" });
+  });
+
+  it("stops between levels when cancelled after a level succeeds", async () => {
+    const controller = new AbortController();
+    let level = 0;
+    const dispatch = vi.fn(async (chunk: string[]) => {
+      // Cancel once level 0's chunks have all been dispatched.
+      if (++level === 2) controller.abort();
+      return { groups: [chunk.map((_, i) => i)] };
+    });
+
+    await expect(
+      canonicalizeLabels(["a", "b", "c", "d"], dispatch, {
+        maxPerRequest: 2,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ reason: "aborted" });
+
+    // Level 0's two chunks ran; level 1 never dispatched.
+    expect(dispatch).toHaveBeenCalledTimes(2);
   });
 });
