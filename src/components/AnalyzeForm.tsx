@@ -38,7 +38,17 @@ interface AnalyzeFormProps {
   onFromChange: (date: string) => void;
   onToChange: (date: string) => void;
   onSubmit: () => void;
+  /** True while work is actually in flight — drives the spinner and its label. */
   isLoading: boolean;
+  /**
+   * True whenever the analyst has committed to this selection: work running, or
+   * a confirmation awaiting an answer.
+   *
+   * Separate from `isLoading` because a pending question is not work in
+   * progress. Reusing one flag made the button say "Reading reviews…" while the
+   * dialog was still asking whether to read anything at all.
+   */
+  isLocked: boolean;
   /**
    * Which engine will run. The note under the button is the only place the app
    * tells an analyst where their review text goes, and the two engines answer
@@ -66,6 +76,7 @@ export function AnalyzeForm({
   onToChange,
   onSubmit,
   isLoading,
+  isLocked,
   engine,
 }: AnalyzeFormProps) {
   const rangeError =
@@ -73,7 +84,7 @@ export function AnalyzeForm({
   const isCategory = scopeKind === "category";
   const subjectChosen = isCategory ? Boolean(category) : Boolean(productId);
   const canSubmit = Boolean(
-    subjectChosen && (!hasDates || (from && to)) && !rangeError && !isLoading,
+    subjectChosen && (!hasDates || (from && to)) && !rangeError && !isLocked,
   );
   const selectedCategory = categories.find((c) => c.category === category);
 
@@ -91,7 +102,7 @@ export function AnalyzeForm({
         <ScopeControl
           kind={scopeKind}
           onChange={onScopeKindChange}
-          disabled={isLoading}
+          disabled={isLocked}
           categoryAvailable={categories.length > 0}
         />
 
@@ -103,7 +114,7 @@ export function AnalyzeForm({
                 value={category}
                 unit={unit}
                 onChange={onCategoryChange}
-                disabled={isLoading}
+                disabled={isLocked}
               />
               {selectedCategory ? (
                 <p className="font-mono text-[11px] text-ink-soft">
@@ -119,7 +130,7 @@ export function AnalyzeForm({
                 products={products}
                 value={productId}
                 onChange={onProductChange}
-                disabled={isLoading}
+                disabled={isLocked}
               />
               {productStats.count > 0 ? (
                 <p className="font-mono text-[11px] text-ink-soft">
@@ -139,7 +150,7 @@ export function AnalyzeForm({
             to={to}
             onFromChange={onFromChange}
             onToChange={onToChange}
-            disabled={isLoading}
+            disabled={isLocked}
             error={rangeError}
           />
         ) : products.length > 0 ? (

@@ -16,6 +16,8 @@ import {
   unitFor,
 } from "./lib/datasetInfo";
 import { useAnalysis } from "./hooks/useAnalysis";
+import { ConfirmRunDialog } from "./components/ConfirmRunDialog";
+import { RunProgressPanel } from "./components/RunProgressPanel";
 import { ANALYSIS_ENGINE } from "./config";
 import { AnalyzeForm } from "./components/AnalyzeForm";
 import { DataSourceControl } from "./components/DataSourceControl";
@@ -148,7 +150,16 @@ export default function App() {
   const scope: AnalysisScope =
     scopeKind === "category" ? { kind: "category", category } : { kind: "product", productId };
   const query: AnalysisInput = { scope, from, to };
-  const { state, analyze, reset } = useAnalysis(query);
+  const { state, analyze, confirmRun, declineRun, cancel, reset } = useAnalysis(query);
+
+  /**
+   * Locked while a decision is pending or work is in flight.
+   *
+   * Both states are "the analyst has committed to this selection": editing it
+   * mid-run would leave a report describing rows nobody asked about, and
+   * editing it mid-question would answer a question about something else.
+   */
+  const isBusy = state.status === "confirming" || state.status === "running";
 
   const [isLoadingDataset, setIsLoadingDataset] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -268,6 +279,7 @@ export default function App() {
           <DataSourceControl
             dataset={dataset}
             isLoadingDataset={isLoadingDataset}
+            disabled={isBusy}
             error={loadError}
             loadStats={loadStats}
             unit={unit}
@@ -295,6 +307,7 @@ export default function App() {
             onToChange={setTo}
             onSubmit={() => analyze(query, dataset)}
             isLoading={state.status === "running"}
+            isLocked={isBusy}
             engine={ANALYSIS_ENGINE}
           />
 
@@ -308,11 +321,30 @@ export default function App() {
               />
             ) : null}
 
+            {state.status === "confirming" ? (
+              <ConfirmRunDialog
+                plan={state.plan}
+                onConfirm={() => confirmRun(query, dataset)}
+                onCancel={declineRun}
+              />
+            ) : null}
+
             {state.status === "running" ? (
+              <RunProgressPanel
+                progress={state.progress}
+                unit={unit}
+                /* Only offered where it can actually stop something. The
+                   heuristic engine is pure and in-browser: there is no request
+                   to abort, so a Cancel button would be decoration. */
+                onCancel={ANALYSIS_ENGINE === "claude" ? cancel : undefined}
+              />
+            ) : null}
+
+            {state.status === "cancelled" ? (
               <StateMessage
-                tone="loading"
-                title={`Reading ${unit.many}…`}
-                description="Weighing customer feedback across the current selection."
+                tone="idle"
+                title="Analysis cancelled"
+                description="No report was created. Your selection is unchanged — run the analysis again when you are ready."
               />
             ) : null}
 

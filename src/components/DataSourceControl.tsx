@@ -12,6 +12,14 @@ interface DataSourceControlProps {
   loadStats: LoadStats | null;
   /** What one row of the active dataset is — a review, or a product record. */
   unit: DatasetUnit;
+  /**
+   * Locked while an analysis is pending or running.
+   *
+   * Swapping the dataset underneath a run would leave a report describing rows
+   * that are no longer loaded — the same ambiguity the query check prevents for
+   * the selection.
+   */
+  disabled?: boolean;
   onFile: (file: File) => void;
   onLoadAmazon: () => void;
   onLoadSampleCsv: () => void;
@@ -22,6 +30,7 @@ interface DataSourceControlProps {
 export function DataSourceControl({
   dataset,
   isLoadingDataset,
+  disabled = false,
   error,
   loadStats,
   unit,
@@ -64,23 +73,23 @@ export function DataSourceControl({
               type="file"
               accept=".csv,text/csv"
               className="sr-only"
-              disabled={isLoadingDataset}
+              disabled={isLoadingDataset || disabled}
               onChange={handleChange}
             />
           </label>
 
           {dataset.source !== "amazon" ? (
-            <button type="button" className={linkClass} disabled={isLoadingDataset} onClick={onLoadAmazon}>
+            <button type="button" className={linkClass} disabled={isLoadingDataset || disabled} onClick={onLoadAmazon}>
               Amazon dataset
             </button>
           ) : null}
 
           {dataset.source === "sample" ? (
-            <button type="button" className={linkClass} disabled={isLoadingDataset} onClick={onLoadSampleCsv}>
+            <button type="button" className={linkClass} disabled={isLoadingDataset || disabled} onClick={onLoadSampleCsv}>
               Load 204-review sample
             </button>
           ) : (
-            <button type="button" className={linkClass} disabled={isLoadingDataset} onClick={onUseBuiltIn}>
+            <button type="button" className={linkClass} disabled={isLoadingDataset || disabled} onClick={onUseBuiltIn}>
               Use built-in sample
             </button>
           )}
