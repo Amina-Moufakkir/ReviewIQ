@@ -4,6 +4,7 @@ import { analyzeWithClaude } from "./claudeEngine";
 import { AnalysisError } from "./analysisEngine";
 import { MAX_ROWS_PER_BATCH_REQUEST } from "./claudeTags";
 import { ceilingRefusalMessage, estimateRun, maxRowsPerAnalysis } from "./runEstimator";
+import { RUN_ENVIRONMENT } from "../config";
 import { DEFAULT_PLANNER_CONFIG } from "./batchPlanner";
 
 /**
@@ -46,21 +47,48 @@ async function refusalMessage(rowCount: number, textLength: number): Promise<str
 }
 
 describe("user-facing limit copy never exposes the internal batch limit", () => {
-  it("does not quote the per-request row limit when refusing an over-budget selection", async () => {
-    const message = await refusalMessage(40, 400);
+  const OVER_CEILING = maxRowsPerAnalysis(RUN_ENVIRONMENT) + 1;
+
+  it("does not quote the per-request row limit when refusing an oversized selection", async () => {
+    const message = await refusalMessage(OVER_CEILING, 400);
     expect(message).not.toContain(String(MAX_ROWS_PER_BATCH_REQUEST));
     expect(message).not.toMatch(/batch/i);
     expect(message).not.toMatch(/per request|per-request/i);
   });
 
-  it("does not quote it when refusing a light selection just over the batch limit", async () => {
-    // The window this PR closed: light rows that pass the budget estimate but
-    // exceed what one request may carry. The refusal must still read as product
-    // guidance, not as a protocol error.
-    const message = await refusalMessage(MAX_ROWS_PER_BATCH_REQUEST + 1, 100);
-    expect(message).not.toContain(String(MAX_ROWS_PER_BATCH_REQUEST));
-    expect(message).not.toMatch(/batch/i);
+  it("refuses in product terms, not as a protocol error", async () => {
+    const message = await refusalMessage(OVER_CEILING, 100);
+    expect(message).not.toMatch(/batch|chunk|hierarch/i);
+    expect(message).not.toMatch(/run id|runid/i);
     expect(message).toMatch(/heuristic engine/);
+  });
+
+  it("no longer refuses a selection merely for exceeding one request", async () => {
+    // The behaviour this PR replaced. A selection just over the per-request
+    // limit used to be refused; it is now split across requests and analyzed,
+    // so there is no copy to leak in the first place.
+    const rowCount = MAX_ROWS_PER_BATCH_REQUEST + 1;
+    expect(rowCount).toBeLessThan(maxRowsPerAnalysis(RUN_ENVIRONMENT));
+
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string) as { reviews: { id: string }[] };
+      return new Response(
+        JSON.stringify({
+          tags: body.reviews.map((r) => ({
+            review_id: r.id,
+            theme: "Sound quality",
+            sentiment: "praise",
+            evidence_span: "x",
+          })),
+          usage: { inputTokens: 10, outputTokens: body.reviews.length * 40 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await analyzeWithClaude(input, dataset(rowCount, 100));
+    expect(result.reviewCount).toBe(rowCount);
   });
 
   it("keeps the ceiling refusal about the analysis ceiling, not the batch limit", () => {

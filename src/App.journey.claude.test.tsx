@@ -19,7 +19,14 @@ import userEvent from "@testing-library/user-event";
  *
  * The engine is chosen at module load, so it is mocked rather than configured.
  */
-vi.mock("./config", () => ({ ANALYSIS_ENGINE: "claude" }));
+// The whole module is replaced, so every export this path reads must be listed:
+// omitting RUN_ENVIRONMENT leaves the run ceiling undefined, which is a broken
+// stub rather than a behaviour worth exercising.
+vi.mock("./config", () => ({
+  ANALYSIS_ENGINE: "claude",
+  RUN_ENVIRONMENT: "protected-demo",
+  resolveRunEnvironment: (value: unknown) => (value === "local" ? "local" : "protected-demo"),
+}));
 
 const { default: App } = await import("./App");
 
@@ -48,13 +55,29 @@ const TAGS = {
 beforeEach(() => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url);
       if (u.includes("/api/analyze")) {
-        return new Response(JSON.stringify(TAGS), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        // Answer with only the tags for rows this request actually carried:
+        // the pipeline splits a selection across several requests, and a
+        // row-agnostic stub would return tags for rows a later batch never
+        // received, which the client-side gate rejects as an unknown id.
+        const sent = JSON.parse((init?.body as string) ?? "{}") as { reviews?: { id: string }[] };
+        const ids = new Set((sent.reviews ?? []).map((r) => r.id));
+        const tags = TAGS.tags.filter((t) => ids.has(t.review_id));
+        return new Response(
+          JSON.stringify({ tags, usage: { inputTokens: 100, outputTokens: ids.size * 40 } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (u.includes("/api/canonicalize")) {
+        // Each label stands for itself: this journey is about rendering a
+        // model-authored label, not about clustering.
+        const sent = JSON.parse((init?.body as string) ?? "{}") as { labels?: string[] };
+        return new Response(
+          JSON.stringify({ groups: (sent.labels ?? []).map((_, i) => [i]) }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       }
       if (u.includes("amazon-products.csv")) {
         return new Response(CSV, { status: 200, headers: { "content-type": "text/csv" } });

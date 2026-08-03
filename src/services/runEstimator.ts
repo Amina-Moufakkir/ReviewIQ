@@ -441,10 +441,24 @@ export function estimateRun(
  * leaves the analyst unable to tell whether they were close. It never truncates
  * silently — refusing and saying so is the whole point of the ceiling.
  */
-export function ceilingRefusalMessage(estimate: RunEstimate, unitPlural = "rows"): string {
+export function ceilingRefusalMessage(
+  estimate: RunEstimate,
+  unitPlural = "rows",
+  /**
+   * Narrowings that exist for THIS query, most specific first.
+   *
+   * Passed in rather than inferred, because only the caller knows what controls
+   * are on screen: suggesting a narrower date range on undated data sends the
+   * analyst after something that is not there, and "pick one product" means
+   * nothing under product scope. Empty is fine — the generic advice below still
+   * applies.
+   */
+  remedies: readonly string[] = [],
+): string {
+  const options = [...remedies, "analyze a smaller selection"].join(", ");
   return (
     `That selection has ${estimate.rowCount} ${unitPlural}, over the ${estimate.ceiling.maxRows} ` +
-    `this deployment allows in one analysis. Analyze a smaller selection, or use the heuristic ` +
+    `this deployment allows in one analysis. You can ${options}, or use the heuristic ` +
     `engine, which has no limit.`
   );
 }
