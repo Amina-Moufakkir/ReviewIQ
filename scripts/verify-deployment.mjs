@@ -25,7 +25,7 @@ import { execFileSync } from "node:child_process";
 const OUTPUT = ".vercel/output";
 
 /** Routes this project is allowed to publish. Anything else fails the check. */
-const ALLOWED_FUNCTIONS = new Set(["api/analyze"]);
+const ALLOWED_FUNCTIONS = new Set(["api/analyze", "api/canonicalize"]);
 
 /**
  * Patterns that must never appear in a deployment artifact. Each carries a

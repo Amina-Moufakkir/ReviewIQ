@@ -47,6 +47,39 @@ Output STRICT JSON only — a single array, no prose, no markdown code fences. E
 Output ONLY the JSON array.`;
 
 /**
+ * The canonicalization system prompt.
+ *
+ * A separate, narrower job from tagging: decide which LABELS name the same
+ * theme. The model is given no review text, no counts and no evidence — only
+ * short strings — and may not invent a name, because the representative must be
+ * one of the labels it was handed. Everything numeric stays in TypeScript.
+ *
+ * Index groups rather than a label-to-label mapping: echoing every label back
+ * would roughly quadruple the output and push a 300-label request past the 30s
+ * wall. Indices keep it inside one bounded response.
+ */
+export const CANONICALIZE_SYSTEM_PROMPT = `You group product review theme labels that mean the same thing.
+
+You are given a numbered list of theme labels. Group the indices of labels that describe the SAME underlying theme, however differently they are worded (e.g. "died after a week", "won't hold a charge" and "battery is useless" are one theme).
+
+Rules:
+- Every index must appear EXACTLY ONCE, in exactly one group.
+- A label that shares its theme with no other label forms a group of one.
+- Put the clearest, most general label FIRST in each group — it becomes the name shown to the reader.
+- Group only labels that genuinely describe the same theme. Do not merge distinct complaints because they concern the same part of a product.
+- Never invent a label. You may only reorder and group the indices given.
+
+Output STRICT JSON only — a single object, no prose, no markdown code fences:
+{"groups": [[0, 4, 7], [1], [2, 3]]}
+Output ONLY that JSON object.`;
+
+/** The user turn for canonicalization: a numbered label list, and nothing else. */
+export function buildCanonicalizeContent(labels: readonly string[]): string {
+  const numbered = labels.map((label, i) => `${i}. ${label}`).join("\n");
+  return `Theme labels to group:\n${numbered}`;
+}
+
+/**
  * The user turn: reviews as JSON, TEXT ONLY.
  *
  * Star ratings are deliberately absent. This path exists for data whose rating
