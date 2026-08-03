@@ -79,25 +79,49 @@ export function useAnalysis(currentQuery: AnalysisInput) {
    */
   const runToken = useRef(0);
   const controller = useRef<AbortController | null>(null);
-  /** The run WE aborted, so a cancellation can be told apart from a failure. */
-  const cancelledToken = useRef<number | null>(null);
+  /**
+   * The token of the run currently in flight, or null when nothing is running.
+   *
+   * This is what makes Cancel apply to the ACTIVE run and nothing else: after a
+   * run settles there is nothing to cancel, and a late click must not wipe out
+   * a report the analyst is already reading.
+   */
+  const activeRun = useRef<number | null>(null);
+  /**
+   * The plan currently awaiting an answer, held by identity.
+   *
+   * A dialog rendered for an older selection still holds that older plan
+   * object, so comparing identity rejects it without needing a separate
+   * fingerprint to keep in sync. Locked controls make this hard to reach by
+   * hand; it is reachable by a stale event or a direct call, which is enough.
+   */
+  const pendingPlan = useRef<PlannedRun | null>(null);
   /** Last accepted progress, for the monotonicity comparison. */
   const lastProgress = useRef<AnalysisProgress | null>(null);
 
-  /** Retire whatever is in flight without starting anything. */
+  /**
+   * Retire whatever is in flight without starting anything.
+   *
+   * The token is bumped BEFORE the abort, so every callback the abort provokes
+   * is already stale by the time it fires.
+   */
   const supersede = useCallback((input: AnalysisInput) => {
-    controller.current?.abort();
     runToken.current++;
+    activeRun.current = null;
+    pendingPlan.current = null;
     lastProgress.current = null;
+    controller.current?.abort();
     setAnalyzedQuery(input);
   }, []);
 
   /** Begin a fresh run, superseding and aborting any run already going. */
   const beginRun = useCallback((input: AnalysisInput) => {
-    controller.current?.abort();
     const token = ++runToken.current;
-    controller.current = new AbortController();
+    pendingPlan.current = null;
     lastProgress.current = null;
+    controller.current?.abort();
+    controller.current = new AbortController();
+    activeRun.current = token;
     setAnalyzedQuery(input);
     return { token, signal: controller.current.signal };
   }, []);
@@ -123,18 +147,13 @@ export function useAnalysis(currentQuery: AnalysisInput) {
           },
         });
         if (token !== runToken.current) return;
+        activeRun.current = null;
         setState(
           result.reviewCount === 0 ? { status: "empty", result } : { status: "success", result },
         );
       } catch (err) {
         if (token !== runToken.current) return;
-        // Cancelled is decided by what WE did, not by matching the error text.
-        // An abort message arriving for a run nobody cancelled is still a
-        // failure and should read like one.
-        if (cancelledToken.current === token) {
-          setState({ status: "cancelled" });
-          return;
-        }
+        activeRun.current = null;
         const message =
           err instanceof AnalysisError
             ? err.message
@@ -168,6 +187,7 @@ export function useAnalysis(currentQuery: AnalysisInput) {
       if (outcome.decision === "confirm") {
         // Nothing is dispatched. The run does not exist until it is approved.
         supersede(input);
+        pendingPlan.current = outcome.plan;
         setState({ status: "confirming", plan: outcome.plan });
         return;
       }
@@ -177,9 +197,17 @@ export function useAnalysis(currentQuery: AnalysisInput) {
     [beginRun, execute, supersede],
   );
 
-  /** Approve a pending estimate and start the run it describes. */
+  /**
+   * Approve a pending estimate and start the run it describes.
+   *
+   * The plan is checked by identity rather than trusted. A dialog left over
+   * from an earlier selection still holds that earlier plan, and starting it
+   * would run one selection while the form reads another — the exact confusion
+   * the query check exists to prevent, arriving by a different route.
+   */
   const confirmRun = useCallback(
-    async (input: AnalysisInput, dataset: Dataset) => {
+    async (plan: PlannedRun, input: AnalysisInput, dataset: Dataset) => {
+      if (plan !== pendingPlan.current) return;
       const { token, signal } = beginRun(input);
       return execute(input, dataset, token, signal, true);
     },
@@ -188,13 +216,26 @@ export function useAnalysis(currentQuery: AnalysisInput) {
 
   /** Decline a pending estimate. Nothing was dispatched, so nothing is stopped. */
   const declineRun = useCallback(() => {
+    pendingPlan.current = null;
     setState({ status: "idle" });
     setAnalyzedQuery(null);
   }, []);
 
-  /** Stop the run in flight. Produces no result, partial or otherwise. */
+  /**
+   * Stop the run in flight. Produces no result, partial or otherwise.
+   *
+   * Two races decide the shape of this. The token is invalidated so a result
+   * that settles a moment later cannot overwrite the cancellation — without
+   * that, a run cancelled at the finish line still renders its report. And it
+   * does nothing at all unless a run is actually active, so a click landing
+   * after a run has completed cannot erase a report already on screen.
+   */
   const cancel = useCallback(() => {
-    cancelledToken.current = runToken.current;
+    if (activeRun.current === null) return;
+    runToken.current++;
+    activeRun.current = null;
+    pendingPlan.current = null;
+    lastProgress.current = null;
     controller.current?.abort();
     setState({ status: "cancelled" });
   }, []);
@@ -206,9 +247,11 @@ export function useAnalysis(currentQuery: AnalysisInput) {
    * describes the data underneath it.
    */
   const reset = useCallback(() => {
-    controller.current?.abort();
     runToken.current++;
+    activeRun.current = null;
+    pendingPlan.current = null;
     lastProgress.current = null;
+    controller.current?.abort();
     setState({ status: "idle" });
     setAnalyzedQuery(null);
   }, []);

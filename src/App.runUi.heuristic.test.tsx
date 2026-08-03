@@ -124,3 +124,40 @@ describe("the heuristic engine keeps its old, simpler flow", () => {
     );
   });
 });
+
+describe("Copy Report exists only for a finished report", () => {
+  /**
+   * The empty state is the case a "do we have a result object?" rule gets
+   * wrong. An empty run DOES produce an AnalysisResult — it just has no
+   * findings — so any rule looser than "status is success" offers Copy for a
+   * document with nothing in it.
+   */
+  it("is absent for a successful run that selected nothing", async () => {
+    stubFetch(10);
+    const user = userEvent.setup();
+    render(<App />);
+    await waitFor(() => {
+      const select = screen.getByLabelText(/^product$/i) as HTMLSelectElement;
+      expect(select.options.length).toBeGreaterThan(0);
+    });
+
+    // The built-in sample carries dates, so a window can genuinely select zero.
+    await user.click(screen.getByRole("button", { name: /use built-in sample/i }));
+    await waitFor(() => expect(screen.getByLabelText(/^from$/i)).toBeTruthy());
+
+    const from = screen.getByLabelText(/^from$/i) as HTMLInputElement;
+    const to = screen.getByLabelText(/^to$/i) as HTMLInputElement;
+    await user.clear(from);
+    await user.type(from, "2000-01-01");
+    await user.clear(to);
+    await user.type(to, "2000-12-31");
+
+    await user.click(document.querySelector('button[type="submit"]') as HTMLButtonElement);
+
+    await waitFor(() => expect(screen.getByText(/No reviews to analyze/i)).toBeTruthy(), {
+      timeout: 15_000,
+    });
+    expect(screen.queryByRole("button", { name: /copy report/i })).toBeNull();
+    expect(document.querySelector("article")).toBeNull();
+  });
+});
