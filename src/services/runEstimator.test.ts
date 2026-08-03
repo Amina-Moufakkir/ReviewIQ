@@ -5,6 +5,7 @@ import {
   ceilingRefusalMessage,
   estimateRun,
   projectBatchCount,
+  projectCanonicalization,
   type EstimatorConfig,
   type RunEnvironment,
 } from "./runEstimator";
@@ -298,5 +299,190 @@ describe("scope: estimation only", () => {
     expect(source).not.toMatch(/XMLHttpRequest|localStorage|document\./);
     expect(source).not.toMatch(/\/api\//);
     expect(source).not.toMatch(/Anthropic|anthropic/);
+  });
+});
+
+// --- hierarchical canonicalization -------------------------------------------
+
+describe("canonicalization is projected level by level", () => {
+  const cfg = DEFAULT_ESTIMATOR_CONFIG;
+  const bound = cfg.maxLabelsPerCanonicalizationRequest;
+
+  it("uses a single level while the labels fit one request", () => {
+    const p = projectCanonicalization(bound, cfg);
+    expect(p.levels).toHaveLength(1);
+    expect(p.levels[0]!.requests).toBe(1);
+    expect(p.levels[0]!.waves).toBe(1);
+    expect(p.unsupported).toBe(false);
+  });
+
+  it("leaves the single-pass case priced exactly as before", () => {
+    // The flat formula the earlier implementation used, which was correct for
+    // one level: labels x per-label input + one system prompt, labels x output.
+    const labels = bound - 1;
+    const p = projectCanonicalization(labels, cfg);
+    expect(p.totalInputTokens).toBe(
+      labels * cfg.canonicalizationInputTokensPerLabel + cfg.systemPromptTokens,
+    );
+    expect(p.totalOutputTokens).toBe(labels * cfg.canonicalizationOutputTokensPerLabel);
+  });
+
+  it("adds a dependent second level as soon as the one-request bound is crossed", () => {
+    const under = projectCanonicalization(bound, cfg);
+    const over = projectCanonicalization(bound + 1, cfg);
+
+    expect(under.levels).toHaveLength(1);
+    expect(over.levels.length).toBeGreaterThan(1);
+    // The second level consumes the first level's representatives.
+    expect(over.levels[1]!.inputLabels).toBe(over.levels[0]!.representatives);
+    expect(over.totalInputTokens).toBeGreaterThan(under.totalInputTokens);
+    expect(over.totalOutputTokens).toBeGreaterThan(under.totalOutputTokens);
+
+    // And the second level is genuinely dependent, so it adds wall-clock too:
+    // at the crossing there is no extra parallelism to offset it.
+    const runtimeOf = (p: typeof under) =>
+      p.levels.reduce((m, l) => {
+        const perRequest =
+          cfg.timeToFirstTokenMs + (l.outputTokens / l.requests / cfg.outputTokensPerSecond) * 1000;
+        return m + l.waves * perRequest;
+      }, 0);
+    expect(runtimeOf(over)).toBeGreaterThan(runtimeOf(under));
+  });
+
+  it("charges label tokens at EVERY level, not just the first", () => {
+    const p = projectCanonicalization(bound * 3, cfg);
+    expect(p.levels.length).toBeGreaterThan(1);
+    for (const level of p.levels) {
+      expect(level.inputTokens).toBeGreaterThan(level.requests * cfg.systemPromptTokens);
+      expect(level.outputTokens).toBeGreaterThan(0);
+    }
+    // The regression this exists to prevent: totals must exceed a model that
+    // counted only the original label set.
+    const firstLevelOnly =
+      p.levels[0]!.inputLabels * cfg.canonicalizationInputTokensPerLabel +
+      p.levels.reduce((n, l) => n + l.requests, 0) * cfg.systemPromptTokens;
+    expect(p.totalInputTokens).toBeGreaterThan(firstLevelOnly);
+  });
+
+  it("runs requests concurrently within a level and levels in sequence", () => {
+    const p = projectCanonicalization(bound * 10, cfg);
+    for (const level of p.levels) {
+      expect(level.waves).toBe(Math.ceil(level.requests / cfg.concurrency));
+    }
+    // Strictly decreasing input across levels: each consumes the last's output.
+    for (let i = 1; i < p.levels.length; i++) {
+      expect(p.levels[i]!.inputLabels).toBeLessThan(p.levels[i - 1]!.inputLabels);
+    }
+  });
+
+  it("never reduces COST as more levels are required", () => {
+    // Tightening the per-request bound forces deeper hierarchies at fixed labels.
+    // Depth cap lifted so every case converges: this measures cost, not depth.
+    const bounds = [4000, 2000, 1000, 500, 300, 100];
+    const results = bounds.map((maxLabelsPerCanonicalizationRequest) => {
+      const c = { ...cfg, maxLabelsPerCanonicalizationRequest, maxCanonicalizationLevels: 10 };
+      const p = projectCanonicalization(3000, c);
+      expect(p.unsupported).toBe(false);
+      return { levels: p.levels.length, input: p.totalInputTokens, output: p.totalOutputTokens };
+    });
+    for (let i = 1; i < results.length; i++) {
+      expect(results[i]!.levels).toBeGreaterThanOrEqual(results[i - 1]!.levels);
+      expect(results[i]!.input).toBeGreaterThanOrEqual(results[i - 1]!.input);
+      expect(results[i]!.output).toBeGreaterThanOrEqual(results[i - 1]!.output);
+    }
+    expect(results.at(-1)!.levels).toBeGreaterThan(results[0]!.levels);
+  });
+
+  // Runtime does NOT share cost's monotonicity, and pretending otherwise would
+  // bake a false invariant into the estimator. Requests inside a level run
+  // concurrently, so splitting into finer chunks can finish SOONER even though
+  // it adds a dependent level and always costs more. Measured: at 475 labels,
+  // bound 300 gives 2 levels / 6,840 input tokens / 16.3s, while bound 100
+  // gives 3 levels / 13,186 tokens / 10.5s — dearer and faster.
+  it("can trade cost for wall-clock: finer chunks cost more and may run faster", () => {
+    const of = (bound: number) => {
+      const c = { ...cfg, maxLabelsPerCanonicalizationRequest: bound, maxCanonicalizationLevels: 10 };
+      const p = projectCanonicalization(475, c);
+      const ms = p.levels.reduce((m, l) => {
+        const perRequest =
+          c.timeToFirstTokenMs + (l.outputTokens / l.requests / c.outputTokensPerSecond) * 1000;
+        return m + l.waves * perRequest;
+      }, 0);
+      return { levels: p.levels.length, input: p.totalInputTokens, ms };
+    };
+    const coarse = of(300);
+    const fine = of(100);
+
+    expect(fine.levels).toBeGreaterThan(coarse.levels);
+    expect(fine.input).toBeGreaterThan(coarse.input); // always dearer
+    expect(fine.ms).toBeLessThan(coarse.ms); // and, here, faster
+  });
+
+  it("reports unsupported when labels do not reduce within the depth cap", () => {
+    const p = projectCanonicalization(100_000, { ...cfg, maxCanonicalizationLevels: 2 });
+    expect(p.unsupported).toBe(true);
+    // Still accounts for the levels it did project, rather than reporting zero.
+    expect(p.totalInputTokens).toBeGreaterThan(0);
+  });
+
+  it("stops immediately at a fixed point where a level merges nothing", () => {
+    // representativeRatio of 1 means no label is ever merged away, so no depth
+    // of hierarchy can ever help. The depth cap is lifted deliberately: without
+    // the fixed-point check the projection would grind out ten futile levels and
+    // charge for every one of them, so this asserts it stops after the first.
+    const p = projectCanonicalization(5000, {
+      ...cfg,
+      representativeRatio: 1,
+      maxCanonicalizationLevels: 10,
+    });
+    expect(p.unsupported).toBe(true);
+    expect(p.levels).toHaveLength(1);
+    expect(p.levels[0]!.representatives).toBe(p.levels[0]!.inputLabels);
+  });
+
+  it("returns an empty projection for no labels", () => {
+    const p = projectCanonicalization(0, cfg);
+    expect(p.levels).toEqual([]);
+    expect(p.totalInputTokens).toBe(0);
+    expect(p.unsupported).toBe(false);
+  });
+});
+
+describe("the run estimate consumes the canonicalization projection", () => {
+  it("surfaces the projection, including the unsupported flag", () => {
+    const e = estimateRun(rows(50, 300), "local");
+    expect(e.canonicalization.levels.length).toBeGreaterThan(0);
+    expect(e.canonicalization.unsupported).toBe(false);
+  });
+
+  it("prices a hierarchical run above a single-pass one", () => {
+    const single = estimateRun(rows(300, 300), "local");
+    const hierarchical = estimateRun(rows(300, 300), "local", {
+      ...DEFAULT_ESTIMATOR_CONFIG,
+      maxLabelsPerCanonicalizationRequest: 20,
+      maxCanonicalizationLevels: 10,
+    });
+    expect(hierarchical.canonicalization.levels.length).toBeGreaterThan(
+      single.canonicalization.levels.length,
+    );
+    expect(hierarchical.cost.canonicalizationUsd).toBeGreaterThan(single.cost.canonicalizationUsd);
+    expect(hierarchical.cost.totalUsd).toBeGreaterThan(single.cost.totalUsd);
+  });
+
+  it("adds runtime when a run first crosses into a second level", () => {
+    // A selection whose labels sit just past the one-request bound pays for a
+    // dependent level with no extra parallelism to absorb it.
+    const c = DEFAULT_ESTIMATOR_CONFIG;
+    const under = estimateRun(rows(300, 300), "local", {
+      ...c,
+      maxLabelsPerCanonicalizationRequest: 10_000,
+    });
+    const over = estimateRun(rows(300, 300), "local", {
+      ...c,
+      maxLabelsPerCanonicalizationRequest: 300,
+    });
+    expect(under.canonicalization.levels).toHaveLength(1);
+    expect(over.canonicalization.levels.length).toBeGreaterThan(1);
+    expect(over.runtime.expectedMs).toBeGreaterThan(under.runtime.expectedMs);
   });
 });
