@@ -7,10 +7,19 @@ Built by Amina Moufakkir as a project for the
 
 **Live demo (GitHub Pages, heuristic) → https://amina-moufakkir.github.io/ReviewIQ/**
 
-**Vercel (public, heuristic-only; `/api/analyze` deployed but disabled and keyless) → https://reviewiq-six.vercel.app/**
+**Live demo (Vercel, heuristic) → https://reviewiq-six.vercel.app/**
 
-> The Claude engine runs on a **separate, access-controlled preview deployment**, not on the
-> public URL above. See [Claude engine & Vercel deployment](#claude-engine--vercel-deployment).
+Both public URLs run the **heuristic engine only**. They are static as far as
+analysis is concerned: the Claude path is compiled out of the bundle, and the two
+serverless routes are deployed but keyless and switched off, answering a
+controlled `503 analysis_disabled` to anyone who calls them directly.
+
+> **The Claude engine is not on either public URL.** It runs on a separate,
+> access-controlled preview deployment, because it spends money on every run.
+> There is no public link to it by design — see
+> [The two deployments](#the-two-deployments) for why, and
+> [External access on Hobby](#external-access-on-hobby) for how it is
+> demonstrated.
 
 > The public demo uses a small **synthetic Amazon-style dataset**, so the full
 > integration can be explored without redistributing the original data. Local
@@ -117,18 +126,23 @@ The per-unit evidence threshold still applies, the date window is still shown
 only for data that carries dates, and the findings header states the scope so a
 category name is never mistaken for a product name.
 
-**Under the Claude engine, large categories are refused, not truncated.** The
-`/api/analyze` endpoint caps a request at 100 rows. A single product is
-comfortably under it; a category often is not — three of the nine Amazon
-categories hold 447–526 records, covering 1,426 of the 1,464 rows. The engine
-checks the count before sending and returns a controlled message naming the
-subject, the real count and the cap, offering only remedies that exist for that
-query. Nothing is silently truncated: a partial answer would look like a
-complete one.
+**Under the Claude engine, a whole category is analyzed in batches** rather than
+in one request — a category is often large, and three of the nine Amazon
+categories hold 447–526 records, covering 1,426 of the 1,464 rows. The batching
+is invisible: the analyst picks a category, and the counts, percentages and
+quotes describe every row in it.
 
-The heuristic engine has no such cap, so category scope works there over any
-size — which is what the deployed demo runs. See
-[Which engine for which data](#which-engine-for-which-data).
+**What is still refused is refused before anything is sent**, and never
+truncated. A selection over `MAX_ROWS_PER_ANALYSIS` (60 on the protected demo,
+600 locally), or one the estimator projects cannot have its themes reconciled,
+returns a controlled message naming the real count and the ceiling and offering
+only remedies that exist for that query. A partial answer would look like a
+complete one, so there is no partial answer — at any stage.
+
+The heuristic engine has no ceiling at all, so category scope works there over
+any size, which is what both public demos run. See
+[Which engine for which data](#which-engine-for-which-data) and
+[Cost, limits, and how spend is bounded](#cost-limits-and-how-spend-is-bounded).
 
 ## CSV upload
 
@@ -377,57 +391,155 @@ The model is the only nondeterministic component in the system, and it is
 sandwiched between deterministic validation and deterministic assembly. It
 proposes; code disposes.
 
+A selection is **not** sent as one request. Benchmarking showed that could not
+reach category scale — see [Why batching](#why-batching). The pipeline splits it
+into bounded batches, tags each one, reconciles the theme labels those
+independent batches produced, and only then computes anything.
+
 ```mermaid
 flowchart TD
     A["selectForScope()<br/>one product OR one category<br/>+ date window"] --> B{"rows matched?"}
-    B -- none --> Z["zeroResult()<br/>no network call, no cost"]
-    B -- "1..n" --> CAP{"more than 100 rows?"}
-    CAP -- yes --> E0["AnalysisError — refused before sending<br/>names the subject, count and cap<br/>NEVER truncated"]
-    CAP -- no --> REQ["POST /api/analyze<br/>id + text only — the rating is NOT sent"]
+    B -- none --> Z["zeroResult()<br/>no request, no cost"]
+    B -- "1..n" --> P["planClaudeRun()<br/>estimate cost, runtime, batches"]
 
-    REQ --> V["parseReviewRequest + size caps<br/>100 reviews · 250 KB body · 200 KB text"]
-    V -- rejected --> E1["400 / 413"]
-    V -- ok --> M["CLAUDE — tags each theme mention<br/>30s timeout · no retries"]
+    P -- "over the run ceiling" --> E0["refused before any request<br/>60 rows demo · 600 local"]
+    P -- "themes not reconcilable" --> E0b["refused before any request<br/>predicted unable to finish"]
+    P -- "over the confirmation threshold" --> C["CONFIRM — analyst approves<br/>cost + runtime shown · zero requests sent"]
+    P -- "under it" --> EX
+    C -- start --> EX
+    C -- cancel --> Z2["idle — nothing was sent"]
 
-    M --> RAW["tags — review_id · theme · sentiment · evidence_span"]
+    EX["executeBatches()<br/>adaptive size · concurrency 6<br/>≤12 rows per request"] --> M
 
-    RAW --> G1["SERVER GATE — validateModelResponse<br/>drop: unknown review id · bad sentiment<br/>· evidence not a verbatim substring"]
+    M["CLAUDE — tags each theme mention<br/>30s per request · retry smaller on timeout"] --> G1
+    G1["SERVER GATE — validateModelResponse<br/>drop: unknown review id · bad sentiment<br/>· evidence not a verbatim substring"]
     G1 -- "all dropped" --> E2["502 analysis_failed"]
-    G1 -- survivors --> RESP["200 — validated tags"]
+    G1 -- survivors --> G2["CLIENT GATE — validateTags<br/>same rules, stricter policy"]
+    G2 -- "any dropped or deduped" --> E3["run fails — no partial report"]
+    G2 -- clean --> COV{"every row covered?"}
+    COV -- no --> E3
+    COV -- yes --> CAN
 
-    RESP --> G2["CLIENT GATE — validateTags<br/>same rules, stricter policy"]
-    G2 -- "any dropped or deduped" --> E3["AnalysisError<br/>version mismatch or tampering"]
-    G2 -- clean --> T["tagsToResult<br/>group by theme · count UNIQUE review ids<br/>· evidence threshold · quote · percent"]
+    CAN["CLAUDE — groups equivalent labels<br/>POST /api/canonicalize · labels only"] --> G3
+    G3["GATE — validateGrouping<br/>must be an exact partition<br/>representative must be a submitted label"]
+    G3 -- invalid --> E4["run fails — never reports on<br/>unreconciled labels"]
+    G3 -- valid --> CT["composeCanonicalTags()<br/>CanonicalTag[] — raw tags are a compile error here"]
 
+    CT --> T["tagsToResult<br/>group by CANONICAL theme · count UNIQUE review ids<br/>· evidence threshold · quote · percent"]
     T --> S["buildSummary + recommendationsFor<br/>every displayed sentence composed in TypeScript"]
     S --> OUT["AnalysisResult<br/>identical contract to the heuristic engine"]
 
     classDef nd fill:#fde68a,stroke:#b45309,color:#111827
     classDef gate fill:#bbf7d0,stroke:#15803d,color:#111827
     classDef err fill:#fecaca,stroke:#b91c1c,color:#111827
-    class M nd
-    class G1,G2 gate
-    class E0,E1,E2,E3 err
+    class M,CAN nd
+    class G1,G2,G3,COV gate
+    class E0,E0b,E2,E3,E4 err
 ```
 
-Three properties are worth reading off the diagram:
+Properties worth reading off the diagram:
 
-- **The rating never reaches the model.** It is absent from the request, so
+- **The rating never reaches the model.** It is absent from every request, so
   sentiment cannot be influenced by it — a structural guarantee rather than an
   instruction the prompt asks the model to follow.
 - **The evidence check is a code gate, not a prompt rule.** Theme naming and
   clustering vary between runs; whether a claim is allowed to appear does not.
-  Measured across three runs on identical text: different groupings each time,
-  zero ungrounded quotes every time.
 - **The second gate is stricter than the first by design.** The server is
   lenient toward an untrusted model — it keeps valid tags and discards bad ones.
   The client trusts the server, so *any* rejection there means a version
-  mismatch or a tampered response, and the whole request fails rather than
-  rendering a partial report.
-- **Two branches exit before any request is sent.** No matching rows returns the
-  empty result; more rows than the cap is refused outright. Both cost nothing,
-  and neither ever produces a partial answer — see
-  [Product or category scope](#product-or-category-scope).
+  mismatch or a tampered response, and the whole run fails rather than rendering
+  a partial report.
+- **Grouping sees labels, never review text.** `/api/canonicalize` has no field
+  for text, and a label longer than 120 characters is refused — so "labels only"
+  is enforced by the contract rather than by convention.
+- **Only an exact partition leaves the grouping gate.** Every label covered once,
+  no invented names. Anything else fails the run, because reporting on
+  unreconciled labels would under-count every theme two batches happened to name
+  differently while looking finished.
+- **`CanonicalTag` cannot be forged.** It and `ValidatedTag` are structurally
+  incompatible in both directions, so passing raw per-batch tags into final
+  aggregation is a compile error rather than a silent under-count.
+- **Four branches exit before any request is sent** — no rows, over the run
+  ceiling, themes predicted unreconcilable, or a declined confirmation. All cost
+  nothing.
+
+#### Why batching
+
+A single synchronous request could not reach category scale, and the reason is
+arithmetic rather than tuning. Measured throughput is ~110 output tokens/second,
+so a 30-second window admits ~3,300 output tokens; a 526-row category needs
+~212,000 — more than the model's own 128k output ceiling. Measured on 2026-08-02
+([`bench/DECISION.md`](bench/DECISION.md)): 5 dense rows completed in ~19s, while
+10 rows, 20 rows, and the entire synthetic demo category all hit the wall.
+
+So the pipeline splits the work. Batch size is not fixed: the planner seeds an
+estimate from text density, then sizes each subsequent batch from an EWMA of
+**measured** output tokens per row, halving on a timeout or truncation and
+growing at most 1.5x at a time. Requests run six at a time, capped at 12 rows
+each — the limit the server enforces independently.
+
+Independent batches name things independently, which is why grouping exists:
+batch 3's "battery life" and batch 47's "poor battery" are one concept wearing
+two labels, and aggregating them separately would split one theme's support in
+two. In the acceptance gate this was not hypothetical — three separately-worded
+labels for one Bluetooth complaint each had a single supporting review, and all
+three would have fallen below the evidence threshold and vanished. Merged, they
+are a real finding at 3 of 11 reviews. See [`bench/GATE.md`](bench/GATE.md).
+
+**A known limitation, unresolved.** Grouping is not deterministic. The same
+category failed once and succeeded once in the acceptance gate, at 169 labels
+against a 300-label limit and a longest label of 40 characters against a limit of
+120 — nothing near a boundary either time. The failure rate is not characterised.
+It is a *terminal, visible* failure that produces no partial or fragmented
+report, and the endpoint records the exact cause; but it is real and it is
+recorded rather than resolved.
+
+#### The run lifecycle
+
+Because a category run can take minutes and cost real money, the interface asks
+before it starts, reports what it is doing, and can be stopped.
+
+```
+idle ── analyze() ──► plan
+                       ├─ refuse   ──► error        (0 requests)
+                       ├─ confirm  ──► confirming   (0 requests)
+                       └─ go       ──► running
+
+confirming ── start ──►  running        (only the current plan may start)
+confirming ── cancel ──► idle           (0 requests, selection preserved)
+
+running ── progress ──► running         (forward only)
+running ── done ─────►  success | empty
+running ── cancel ───►  cancelled
+running ── failure ──►  error
+```
+
+| Status | Report shown | Copy Report | Controls | Cancel |
+| --- | --- | --- | --- | --- |
+| `idle` | — | — | enabled | — |
+| `confirming` | — | — | **locked** | dialog Cancel |
+| `running` | — | — | **locked** | Claude only |
+| `success` | yes | **available** | enabled | — |
+| `empty` | — | — | enabled | — |
+| `cancelled` | — | — | enabled | — |
+| `error` | — | — | enabled | — |
+
+- **Confirmation is a decision, not a progress step.** The planner returns
+  "confirm" *instead of* starting, so reaching that state is itself the
+  guarantee that nothing has been dispatched. The same planner runs inside the
+  engine, so a run the dialog offers is one the engine would accept, and an
+  unconfirmed costly run called directly is still refused.
+- **Progress counts rows, never requests.** Adaptive sizing means the eventual
+  request count is unknown mid-run, so a percentage built on it would slide
+  backwards as the planner resizes. Row totals are fixed when the run starts.
+  Updates that would move backwards are ignored rather than clamped into
+  something plausible, which would hide a defect rather than surface it.
+- **Cancellation produces no report**, is distinct from failure, and applies only
+  to the active run — a click landing after a run finishes cannot erase a report
+  already on screen.
+- **The heuristic engine has none of this.** It is pure, synchronous and
+  in-browser: nothing to confirm, no stage to report, nothing to abort. It shows
+  a plain working message rather than a fabricated row counter.
 
 ### Why the second engine exists
 
@@ -818,6 +930,7 @@ must not.
 | Vercel target | `production`, branch `main` | `preview`, branch `claude-demo` |
 | URL | https://reviewiq-six.vercel.app/ | `reviewiq-git-claude-demo-<scope>.vercel.app` |
 | Anonymous access | open, by design | blocked at the edge (401) |
+| Routes deployed | both, keyless and disabled | both, live |
 | Engine | heuristic | Claude |
 | Data | synthetic `amazon-demo.csv` | synthetic `amazon-demo.csv` |
 | Anthropic key | **none, ever** | dedicated demo key |
@@ -847,6 +960,7 @@ Claude-related is ever set on the production target.
 | `CLAUDE_ENABLED` | **unset → disabled** | `true` | only the exact string `true` enables |
 | `LOG_SALT` | unset | set | omitted ⇒ no caller hash logged |
 | `VITE_ANALYSIS_ENGINE` | unset → heuristic | `claude` | build-time; an engine name, not a secret |
+| `VITE_RUN_ENVIRONMENT` | unset → `protected-demo` | unset → `protected-demo` | build-time; picks the 60-row ceiling. Only `local` opts up to 600 |
 
 Two properties this buys:
 
@@ -1032,32 +1146,47 @@ Then, signed in: run one analysis on the demo, confirm the report renders; set
 
 ### Verification record — 2026-08-03
 
-Run against Git-triggered deployments of `f5fbf8c`, anonymously except where noted.
+Run against Git-triggered deployments of `4e27549`, anonymously except where
+noted.
 
 | # | check | result |
 | --- | --- | --- |
 | 1 | Public production `GET /` | **200** — open |
 | 2 | Public production `POST /api/analyze` | **503** `analysis_disabled` |
-| 3 | Protected preview `GET /`, anonymous | **302** → Vercel SSO |
-| 3 | Protected preview `POST /api/analyze`, anonymous | **401** — blocked at the edge, function never runs |
-| 4 | Protected preview, signed in | Claude analysis completed end to end |
+| 3 | Public production `POST /api/canonicalize` | **503** `analysis_disabled` |
+| 4 | Protected preview `GET /`, anonymous | **302** → Vercel SSO |
+| 5 | Protected preview `POST /api/analyze`, anonymous | **401** — blocked at the edge, function never runs |
+| 6 | Protected preview, signed in | full run lifecycle exercised end to end |
 
 Supporting evidence:
 
-- **Environment scoping.** `vercel env ls` shows all five Claude variables as
+- **Environment scoping.** `vercel env ls` shows every Claude variable as
   `Preview (claude-demo)`. **No Claude variable has a Production target.**
-- **Production cannot call the endpoint at all.** The deployed production bundle
-  contains no `/api/analyze` string and none of the Claude engine's error
-  messages — the path is compiled out, not merely disabled by an unset variable.
-  No key or SDK literal is present either.
-- **The preview runs the Claude engine.** The page shows the Anthropic
-  disclosure rather than the browser-only one, and the footer reads
-  `CLAUDE, TEXT-BASED SENTIMENT`.
-- **Mixed sentiment on a 5.0-star record.** The demo run returned three praise
-  themes and one fault (`temperature control precision`) from a single record
-  rated 5.0★. That is the case the rating-based heuristic engine structurally
-  cannot represent, so it is the clearest end-to-end proof that the Claude path
-  is live and doing what SPEC.md claims.
+- **Production cannot call either endpoint.** The deployed production bundle
+  contains **zero** occurrences of `/api/analyze` or `/api/canonicalize` — the
+  Claude path is compiled out, not merely disabled by an unset variable. No key
+  or SDK literal is present either.
+- **Published routes are exactly two.** `verify:deployment` asserts an allowlist,
+  confirmed independently against the `.func` bundles in `.vercel/output` and the
+  contents of `api/`.
+- **The run lifecycle behaves as documented**, verified in the signed-in demo:
+  - a 1-record selection started immediately with no dialog;
+  - a 40-record upload showed the confirmation dialog — *"Analyze 40 product
+    records? · Estimated time: 24–70 seconds · Conservative API cost estimate: up
+    to about $0.64"* — with **zero `/api/` requests** issued before approval,
+    confirmed from the browser's own network log;
+  - progress read *"Analyzing reviews… 2 of 40 product records"* against an
+    advancing bar;
+  - Cancel produced *"ANALYSIS CANCELLED — No report was created"*, no report,
+    and an unchanged selection;
+  - Copy Report was absent while running and present once the report rendered.
+
+  The dialog's $0.64 ceiling matched the estimate computed locally ($0.6305,
+  rounded up to the cent), so the deployed estimator agrees with the local one.
+- **Mixed sentiment on a 5.0-star record.** The demo returned three praise themes
+  and one fault (`temperature control precision`) from a single record rated
+  5.0★ — the case the rating-based heuristic engine structurally cannot
+  represent, and so the clearest end-to-end proof the Claude path is live.
 - **Structured logs land as designed**, with the caller hash truncated here:
 
   ```json
@@ -1069,7 +1198,13 @@ Supporting evidence:
     "inputTokens": 585, "outputTokens": 209 }
   ```
 
-  No review text, no evidence spans, no key material. That request cost $0.008.
+  No review text, no evidence spans, no key material.
+
+**One thing the built-in demo data cannot show.** Every category in
+`amazon-demo.csv` is small enough to run unasked — the largest is 8 records at an
+estimated $0.05, well under the $0.25 confirmation threshold. Reaching the
+confirmation dialog on the demo requires uploading a larger CSV, which is how the
+check above was performed.
 
 ### External access on Hobby
 
@@ -1087,48 +1222,52 @@ and there is no teammate to invite. So:
   for one recipient.
 - **Never publish it** in a README, résumé, application, or public link.
 
-### Cost, limits, and the current scale ceiling
+### Cost, limits, and how spend is bounded
 
 Per-request controls: fixed model from server config, fixed `max_tokens`,
-`maxRetries: 0`, 30s timeout, ≤100 reviews, ≤250 KB body, ≤200 KB review text.
+`maxRetries: 0`, a 30s provider timeout, and independent server-side size caps.
 The Anthropic account's **$20 spending limit is the final backstop, not the
-control** — it cannot tell a legitimate run from a loop, which is why the kill
-switch and the per-request caps sit in front of it.
+control** — it cannot tell a legitimate run from a loop, which is why everything
+below sits in front of it.
 
-**Two different row limits.** They are separate controls and must not be
-confused:
+**Three row limits, three different questions.** They are separate controls and
+must never be conflated:
 
-| control | value | layer | meaning |
+| control | value | layer | the question it answers |
 | --- | --- | --- | --- |
-| `MAX_REVIEWS_PER_REQUEST` | 100 | server | **safety limit** — the most one request may carry. Bounds cost and payload, holds against a buggy or hostile client |
-| `SYNC_OUTPUT_TOKEN_BUDGET` | 2,200 tokens | client | **capability limit** — what one synchronous request can actually finish inside the 30s wall |
+| `MAX_ROWS_PER_ANALYSIS` | 60 protected demo · 600 local | client | **How large a selection may be submitted at all?** The analyst-facing ceiling. Over it: refused before any request. |
+| `maxRowsPerBatch` | 12 | client planner | **How many rows go in one request?** Planning configuration, invisible to the analyst. |
+| `MAX_ROWS_PER_BATCH_REQUEST` | 12 | server | **How many rows will the endpoint accept?** Enforced independently of the planner, with no slack — a 413 from it means the client is broken, and no user-facing copy ever quotes it. |
 
-The capability limit estimates *output* volume, because output is what times
-out: `100 x rows + 0.31 x textBytes`, fitted to the two measured densities
-(~405 output tok/row on dense Amazon listings, ~136 on light synthetic rows). It
-correctly predicts every benchmark run, including the 25-row synthetic timeout
-whose ~3,400 streamed tokens it estimates at 3,372.
+Which analysis ceiling applies comes from `VITE_RUN_ENVIRONMENT`, resolved
+fail-closed: only the exact string `local` opts up to 600, and every other value
+— unset, misspelt, `LOCAL` — resolves to the smaller one. A misconfiguration
+should cost a refusal the analyst can see, not an oversized paid run nobody
+authorised.
 
-A fixed row cap cannot express this: 25 light rows fail where 5 dense rows
-succeed, despite being a tenth the bytes. Selections over budget are refused up
-front with an explanation, rather than accepted and timed out 30 seconds later —
-which is what the old check did, since it compared against the 100-row *safety*
-limit and let a 30-row selection straight through.
+Body caps enforced by `/api/analyze`: 250 KB request body, 200 KB total review
+text. By `/api/canonicalize`: 300 labels, 120 characters per label, 64 KB body
+measured in **UTF-8 bytes from the parsed body** rather than a `Content-Length`
+the caller controls.
 
-The estimator is a two-point fit and an interim guard. Rolling measured density
-replaces it when batching lands.
+**Before spending, the run is estimated.** `estimateRun()` projects a
+conservative cost ceiling, a runtime range, and a batch count. Three outcomes:
 
-**Known limitation — category-scale analysis.** Benchmarking
-([`bench/DECISION.md`](bench/DECISION.md)) showed the single-request design does
-not reach category scale: throughput is ~110 output tok/s, a 30s window admits
-~3,300 output tokens, and a 526-row category needs ~212,000 — more than the
-model's own 128k output ceiling. Measured: 5 rows pass, 10 and 20 rows time out,
-and the full 25-row synthetic demo category times out. The fix is batching, not a
-longer timeout or a different model; the design is in
-[`docs/adr/0001-category-scale-claude-analysis.md`](docs/adr/0001-category-scale-claude-analysis.md)
-and is **not yet implemented**. Until it is, the Claude engine is reliable only
-on small selections, and larger ones surface a controlled timeout rather than a
-wrong answer.
+- over `MAX_ROWS_PER_ANALYSIS` → refused, nothing sent;
+- projected unable to reconcile its themes → refused, nothing sent, because a run
+  that ends in terminal grouping failure has still paid for every tagging request
+  it made along the way;
+- over the environment's confirmation threshold ($0.25 demo, $0.50 local) → the
+  analyst is asked first, with the figures shown.
+
+Cost is a ceiling, not a price. Runtime is a range. Both rest on a two-point
+density fit, which is why the ceilings and the confirmation gate exist rather
+than being made unnecessary by a better estimate.
+
+**Measured, not projected.** The acceptance gate ran the real pipeline against
+the real API over 62 rows in four complete category analyses: 34 requests, zero
+retries, $0.6879. Every displayed number was then recomputed independently of the
+aggregator — 126 findings, zero mismatches. See [`bench/GATE.md`](bench/GATE.md).
 
 ### Model choice
 
@@ -1164,21 +1303,53 @@ npm run typecheck       # tsc
 npm run lint            # eslint
 npm test                # vitest (engines, CSV parsing, Amazon adapter, product labels, query-bound state)
 npm run build           # production build
-npm run verify:bundle   # fail if the built client bundle contains a key or the Anthropic SDK
+npm run preview         # serve the production build locally
+npm run verify:bundle   # fail if the built CLIENT bundle contains a key or the Anthropic SDK
+npm run verify:deployment  # fail if .vercel/output publishes an unexpected route or a secret
 npm run build:amazon    # regenerate public/amazon-products.csv from src/amazon.csv
 
-# Local only, spends money, never run in CI. See bench/DECISION.md.
+# Local only, spend real money, never run in CI.
 node scripts/bench-models.ts            # dry run: real token counts, no generation
 node scripts/bench-models.ts --confirm  # execute, under a provable spend ceiling
+
+# The acceptance gate. Deliberately awkward to run by accident: the file is
+# named *.gate.ts so vitest's default include cannot match it, and its config
+# must be passed explicitly. See bench/GATE.md.
+node --env-file=.env.local ./node_modules/vitest/vitest.mjs run --config vitest.gate.config.ts
 ```
+
+The two scans answer different questions — see
+[Verification checklist](#verification-checklist).
 
 ## Status
 
-✅ Core MVP complete — the real Amazon product dataset as the default source,
-CSV upload, and a deterministic heuristic engine, plus an optional
-Claude-powered semantic-tagging engine behind the same `analyzeReviews()`
-boundary (server-side key, controlled errors, identical UI and
-`AnalysisResult`). Engine chosen by `VITE_ANALYSIS_ENGINE`.
+✅ **Core MVP complete.** The real Amazon product dataset as the default source,
+CSV upload, and a deterministic heuristic engine — plus a Claude-powered semantic
+engine behind the same `analyzeReviews()` boundary, with an identical UI and
+`AnalysisResult` contract. Engine chosen by `VITE_ANALYSIS_ENGINE`.
+
+✅ **Category-scale Claude analysis.** Selections are split into bounded batches,
+sized from measured output density; the theme labels independent batches produce
+are reconciled through a second, labels-only endpoint; and every count,
+percentage, threshold, ordering and quote is then computed in TypeScript. All or
+nothing throughout — a failure at any stage produces no report rather than a
+partial one. Verified end to end against the real API, with every displayed
+number recomputed independently of the aggregator
+([`bench/GATE.md`](bench/GATE.md)).
+
+✅ **Run lifecycle.** Costly runs are estimated and confirmed before anything is
+sent, progress is reported by row, and a run can be cancelled without leaving a
+partial report.
+
+⚠️ **Known limitation, unresolved.** Theme grouping is not deterministic: the
+same selection failed once and succeeded once during acceptance testing, nowhere
+near any limit. The failure is terminal and visible — never a silently
+fragmented report — and the endpoint records its exact cause, but the rate is not
+characterised. Recorded in [`bench/GATE.md`](bench/GATE.md).
+
+**Not built, deliberately** — authentication, a database, user accounts,
+dashboards, charts, cross-category ranking, notifications, file export, and
+analytics. See [`CLAUDE.md`](CLAUDE.md).
 
 ## License
 
