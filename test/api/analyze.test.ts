@@ -45,6 +45,7 @@ vi.mock("@anthropic-ai/sdk", () => {
 });
 
 const { default: handler } = await import("../../api/analyze.js");
+const { MAX_ROWS_PER_BATCH_REQUEST } = await import("../../src/services/claudeTags.js");
 
 // --- harness ----------------------------------------------------------------
 
@@ -243,23 +244,59 @@ describe("the provider is never reached from an invalid request", () => {
     expect(mocks.stream).not.toHaveBeenCalled();
   });
 
-  it("rejects more reviews than the cap without calling the provider", async () => {
-    const reviews = Array.from({ length: 101 }, (_, i) => ({ id: `r${i}`, text: "ok" }));
+  it("accepts a batch exactly at the per-request row limit", async () => {
+    mocks.stream.mockReturnValue(rawStream("[]"));
+    const reviews = Array.from({ length: MAX_ROWS_PER_BATCH_REQUEST }, (_, i) => ({
+      id: `r${i}`,
+      text: "ok",
+    }));
+    const { r, captured } = res();
+    await handler(req({ reviews }), r);
+
+    expect(captured.status).toBe(200);
+    expect(mocks.stream).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects one row over the limit, before the provider is reached", async () => {
+    const reviews = Array.from({ length: MAX_ROWS_PER_BATCH_REQUEST + 1 }, (_, i) => ({
+      id: `r${i}`,
+      text: "ok",
+    }));
     const { r, captured } = res();
     await handler(req({ reviews }), r);
 
     expect(captured.status).toBe(413);
     expect((captured.body as { error: { code: string } }).error.code).toBe("too_many_reviews");
+    // The point of the gate: nothing is spent discovering the overshoot.
     expect(mocks.stream).not.toHaveBeenCalled();
   });
 
-  it("rejects an oversized declared body without calling the provider", async () => {
+  it("enforces the text-byte limit independently of the row limit", async () => {
+    // Few enough rows to pass the row gate, far too much text to pass the byte
+    // gate. One limit must not stand in for the other.
+    const reviews = [{ id: "r1", text: "x".repeat(300_000) }];
     const { r, captured } = res();
-    await handler(req(validBody(), { headers: { "content-length": String(10 * 1024 * 1024) } }), r);
+    await handler(req({ reviews }), r);
+
+    expect(reviews.length).toBeLessThanOrEqual(MAX_ROWS_PER_BATCH_REQUEST);
+    expect(captured.status).toBe(413);
+    expect((captured.body as { error: { code: string } }).error.code).toBe("payload_too_large");
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
+  it("enforces the declared body-size limit independently of the row limit", async () => {
+    const { r, captured } = res();
+    await handler(
+      req({ reviews: [{ id: "r1", text: "ok" }] }, {
+        headers: { "content-length": String(10 * 1024 * 1024) },
+      }),
+      r,
+    );
 
     expect(captured.status).toBe(413);
     expect(mocks.stream).not.toHaveBeenCalled();
   });
+
 });
 
 // --- success ----------------------------------------------------------------

@@ -4,6 +4,7 @@ import {
   validateTags,
   estimateOutputTokens,
   withinEstimatedSyncBudget,
+  MAX_ROWS_PER_BATCH_REQUEST,
   SYNC_OUTPUT_TOKEN_BUDGET,
 } from "./claudeTags";
 import { tagsToResult, zeroResult } from "./tagsToResult";
@@ -46,8 +47,17 @@ export async function analyzeWithClaude(
   //
   // The estimate is deliberately conservative and is a stopgap. Batching removes
   // this ceiling; see docs/adr/0001-category-scale-claude-analysis.md.
+  //
+  // Two conditions, because the endpoint now takes one BATCH rather than a
+  // whole selection. The budget alone is not sufficient: on light rows it
+  // admits ~16, while the server accepts 12, which would send a request
+  // guaranteed to be refused. Until the executor lands and splits selections
+  // into batches, this path must send only what one batch may carry.
   const textBytes = matched.reduce((sum, r) => sum + byteLength(r.text), 0);
-  if (!withinEstimatedSyncBudget(matched.length, textBytes)) {
+  const fitsOneRequest =
+    matched.length <= MAX_ROWS_PER_BATCH_REQUEST &&
+    withinEstimatedSyncBudget(matched.length, textBytes);
+  if (!fitsOneRequest) {
     throw new AnalysisError(
       overLimitMessage(product.name, matched.length, textBytes, unit, input),
     );

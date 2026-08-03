@@ -7,7 +7,7 @@ import Anthropic from "@anthropic-ai/sdk";
 // of ../types is erased at compile time.
 import {
   MAX_REQUEST_BODY_BYTES,
-  MAX_REVIEWS_PER_REQUEST,
+  MAX_ROWS_PER_BATCH_REQUEST,
   MAX_TOTAL_REVIEW_TEXT_BYTES,
   parseReviewRequest,
   toRawTag,
@@ -84,11 +84,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return fail(400, "invalid_request", parsed.invalid, { reviewCount: 0 });
   }
   const reviews = parsed;
-  if (reviews.length > MAX_REVIEWS_PER_REQUEST) {
+  if (reviews.length > MAX_ROWS_PER_BATCH_REQUEST) {
     return fail(
       413,
       "too_many_reviews",
-      `At most ${MAX_REVIEWS_PER_REQUEST} reviews can be analyzed at once.`,
+      // Deliberately phrased as a client-contract violation, not analyst
+      // guidance: this endpoint takes one batch, and a caller that overshoots
+      // is a broken orchestrator, not a user who selected too much.
+      `A batch may contain at most ${MAX_ROWS_PER_BATCH_REQUEST} rows.`,
       { reviewCount: reviews.length },
     );
   }

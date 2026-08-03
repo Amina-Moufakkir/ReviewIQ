@@ -55,6 +55,19 @@ export const ENVIRONMENT_CEILINGS: Record<RunEnvironment, EnvironmentCeiling> = 
   local: { maxRows: 600, confirmAboveUsd: 0.5 },
 };
 
+/**
+ * The total-analysis ceiling for an environment: the largest category an
+ * analyst may submit.
+ *
+ * Named separately from the planner's `maxRowsPerBatch` and the server's
+ * `MAX_ROWS_PER_BATCH_REQUEST` because the three answer different questions and
+ * are routinely confused: how much may be asked for, how much goes in a batch,
+ * and how much one request may carry.
+ */
+export function maxRowsPerAnalysis(environment: RunEnvironment): number {
+  return ENVIRONMENT_CEILINGS[environment].maxRows;
+}
+
 // --- configuration -----------------------------------------------------------
 
 export interface EstimatorConfig {

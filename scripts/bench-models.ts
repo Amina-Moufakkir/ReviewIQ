@@ -36,7 +36,7 @@ import {
   validateTags,
   parseTagArray,
   stripCodeFence,
-  MAX_REVIEWS_PER_REQUEST,
+  MAX_ROWS_PER_BATCH_REQUEST,
   MAX_REQUEST_BODY_BYTES,
   MAX_TOTAL_REVIEW_TEXT_BYTES,
   type ValidatedTag,
@@ -148,8 +148,8 @@ function assertEndpointWouldAccept(f: Fixture): void {
     throw new Error(`Fixture "${f.label}" would be rejected by /api/analyze: ${why}`);
   };
   if (f.reviews.length === 0) fail("reviews must be a non-empty array");
-  if (f.reviews.length > MAX_REVIEWS_PER_REQUEST) {
-    fail(`${f.reviews.length} rows exceeds MAX_REVIEWS_PER_REQUEST (${MAX_REVIEWS_PER_REQUEST})`);
+  if (f.reviews.length > MAX_ROWS_PER_BATCH_REQUEST) {
+    fail(`${f.reviews.length} rows exceeds MAX_ROWS_PER_BATCH_REQUEST (${MAX_ROWS_PER_BATCH_REQUEST})`);
   }
   const seen = new Set<string>();
   for (const r of f.reviews) {
@@ -218,7 +218,7 @@ function loadClusterFixture(): Fixture {
  * clone. The run continues without it and says so.
  */
 function loadRealShapeFixture(
-  maxRows: number = MAX_REVIEWS_PER_REQUEST,
+  maxRows: number = MAX_ROWS_PER_BATCH_REQUEST,
   csv = "public/amazon-products.csv",
 ): Fixture | null {
   const path = join(ROOT, csv);
@@ -691,7 +691,7 @@ async function sweep(confirmed: boolean) {
     );
   }
   console.log(
-    `\nRecommended MAX_REVIEWS_PER_REQUEST: ${chosen ?? "none of the tested sizes met the bar"}`,
+    `\nRecommended MAX_ROWS_PER_BATCH_REQUEST: ${chosen ?? "none of the tested sizes met the bar"}`,
   );
 
   finish(results, spent, false, "cap-sweep");
@@ -730,7 +730,7 @@ async function main() {
     );
   }
   console.log(
-    `  limits: rows<=${MAX_REVIEWS_PER_REQUEST}  text<=${MAX_TOTAL_REVIEW_TEXT_BYTES}B  body<=${MAX_REQUEST_BODY_BYTES}B\n`,
+    `  limits: rows<=${MAX_ROWS_PER_BATCH_REQUEST}  text<=${MAX_TOTAL_REVIEW_TEXT_BYTES}B  body<=${MAX_REQUEST_BODY_BYTES}B\n`,
   );
 
   // Real token counts, free, before any generation is billed.
