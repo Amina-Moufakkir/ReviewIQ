@@ -1,8 +1,23 @@
 import { describe, it, expect } from "vitest";
 import type { AnalysisInput, Product, Review } from "../types";
-import { validateTags, type RawTag } from "./claudeTags";
+import { validateTags, type RawTag, type ValidatedTag } from "./claudeTags";
 import { tagsToResult } from "./tagsToResult";
+import { composeCanonicalTags, distinctThemeLabels } from "./canonicalTag";
 import { PRODUCT_RECORD } from "../lib/datasetInfo";
+
+/**
+ * Canonicalize with an identity mapping — every label maps to itself.
+ *
+ * These tests are about aggregation, not about clustering, so each theme stands
+ * for itself and the arithmetic is unchanged from before the canonical boundary
+ * existed. Tests that exercise real merging live in canonicalTag.test.ts.
+ */
+function asCanonical(valid: ValidatedTag[]) {
+  return composeCanonicalTags(
+    valid,
+    new Map(distinctThemeLabels(valid).map((label) => [label, label] as const)),
+  );
+}
 
 const PRODUCT: Product = { id: "p1", name: "Test Widget", category: "Electronics", topCategory: "Electronics" };
 const INPUT: AnalysisInput = {
@@ -19,7 +34,7 @@ function review(id: string, text: string, author: string): Review {
 function analyze(matched: Review[], raw: RawTag[]) {
   const reviewsById = new Map(matched.map((r) => [r.id, r.text] as const));
   const { valid } = validateTags(raw, reviewsById);
-  return tagsToResult(INPUT, PRODUCT, matched, valid);
+  return tagsToResult(INPUT, PRODUCT, matched, asCanonical(valid));
 }
 
 describe("tagsToResult", () => {
@@ -163,7 +178,7 @@ describe("tagsToResult", () => {
     ];
     const reviewsById = new Map(matched.map((r) => [r.id, r.text] as const));
     const { valid } = validateTags(raw, reviewsById);
-    const result = tagsToResult(INPUT, PRODUCT, matched, valid, PRODUCT_RECORD);
+    const result = tagsToResult(INPUT, PRODUCT, matched, asCanonical(valid), PRODUCT_RECORD);
     expect(result.recommendations).toEqual([
       "Investigate wobbly base — raised in the selected product record.",
     ]);
@@ -185,8 +200,8 @@ describe("tagsToResult — evidence threshold follows the dataset unit", () => {
     const reviewsById = new Map(one.map((r) => [r.id, r.text] as const));
     const { valid } = validateTags(raw, reviewsById);
     return unit
-      ? tagsToResult(INPUT, PRODUCT, one, valid, unit)
-      : tagsToResult(INPUT, PRODUCT, one, valid);
+      ? tagsToResult(INPUT, PRODUCT, one, asCanonical(valid), unit)
+      : tagsToResult(INPUT, PRODUCT, one, asCanonical(valid));
   }
 
   it("drops a single-review theme for review data", () => {

@@ -8,6 +8,7 @@ import {
   SYNC_OUTPUT_TOKEN_BUDGET,
 } from "./claudeTags";
 import { tagsToResult, zeroResult } from "./tagsToResult";
+import { composeCanonicalTags, distinctThemeLabels } from "./canonicalTag";
 import { formatCount, unitFor, type DatasetUnit } from "../lib/datasetInfo";
 
 /**
@@ -120,7 +121,17 @@ export async function analyzeWithClaude(
     throw new AnalysisError("The analysis service returned an invalid response. Please try again.");
   }
 
-  return tagsToResult(input, product, matched, valid, unitFor(dataset));
+  // An identity mapping, and correct here rather than a stopgap: this path sends
+  // the whole selection as ONE request, so every tag came from a single labeling
+  // pass and the model already used one label per concept across it. There is no
+  // cross-batch fragmentation to reconcile, because there are no other batches.
+  //
+  // It is built inline instead of behind a shared "identity mapping" helper on
+  // purpose. Such a helper is exactly the shape a fragmented-label fallback
+  // would take, and canonicalization failure must stay terminal.
+  const identity = new Map(distinctThemeLabels(valid).map((label) => [label, label] as const));
+
+  return tagsToResult(input, product, matched, composeCanonicalTags(valid, identity), unitFor(dataset));
 }
 
 /**
