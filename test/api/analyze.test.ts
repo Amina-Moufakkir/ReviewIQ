@@ -44,7 +44,7 @@ vi.mock("@anthropic-ai/sdk", () => {
   return { default: Anthropic };
 });
 
-const { default: handler } = await import("./analyze.js");
+const { default: handler } = await import("../../api/analyze.js");
 
 // --- harness ----------------------------------------------------------------
 
