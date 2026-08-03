@@ -78,10 +78,10 @@ export const MAX_TOTAL_REVIEW_TEXT_BYTES = 200 * 1024;
 
 /** Output-token budget for one synchronous request (~20s at ~110 tok/s). */
 export const SYNC_OUTPUT_TOKEN_BUDGET = 2200;
-/** Fixed output cost per row: the tag scaffolding a row incurs regardless of length. */
-export const SYNC_TOKENS_PER_ROW = 100;
-/** Marginal output cost per byte of review text. */
-export const SYNC_TOKENS_PER_TEXT_BYTE = 0.31;
+/** Estimated fixed output cost per row: tag scaffolding, regardless of length. */
+export const ESTIMATED_OUTPUT_TOKENS_PER_ROW = 100;
+/** Estimated marginal output cost per byte of review text. */
+export const ESTIMATED_OUTPUT_TOKENS_PER_TEXT_BYTE = 0.31;
 
 /**
  * Estimated output tokens for a selection. Validated against every measurement
@@ -90,11 +90,18 @@ export const SYNC_TOKENS_PER_TEXT_BYTE = 0.31;
  * estimates at 3,372.
  */
 export function estimateOutputTokens(rowCount: number, textBytes: number): number {
-  return Math.round(rowCount * SYNC_TOKENS_PER_ROW + textBytes * SYNC_TOKENS_PER_TEXT_BYTE);
+  return Math.round(rowCount * ESTIMATED_OUTPUT_TOKENS_PER_ROW + textBytes * ESTIMATED_OUTPUT_TOKENS_PER_TEXT_BYTE);
 }
 
-/** Whether a selection is small enough to finish in one synchronous request. */
-export function fitsSyncBudget(rowCount: number, textBytes: number): boolean {
+/**
+ * Whether a selection is ESTIMATED to finish in one synchronous request.
+ *
+ * A projection from measured densities, not a guarantee: a selection that
+ * passes may still time out if its rows are denser than the fit predicts. It is
+ * deliberately conservative for that reason. It is a refusal gate, never a
+ * promise of success.
+ */
+export function withinEstimatedSyncBudget(rowCount: number, textBytes: number): boolean {
   return estimateOutputTokens(rowCount, textBytes) <= SYNC_OUTPUT_TOKEN_BUDGET;
 }
 

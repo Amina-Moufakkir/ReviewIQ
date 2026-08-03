@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   estimateOutputTokens,
-  fitsSyncBudget,
+  withinEstimatedSyncBudget,
   MAX_REVIEWS_PER_REQUEST,
   SYNC_OUTPUT_TOKEN_BUDGET,
 } from "./claudeTags";
@@ -23,7 +23,7 @@ const MEASURED = [
 
 describe("synchronous budget — checked against measured runs", () => {
   it.each(MEASURED)("predicts $label ($completed)", ({ rows, bytes, completed }) => {
-    expect(fitsSyncBudget(rows, bytes)).toBe(completed);
+    expect(withinEstimatedSyncBudget(rows, bytes)).toBe(completed);
   });
 
   // The 25-row synthetic run timed out having streamed ~8,000 characters,
@@ -38,8 +38,8 @@ describe("synchronous budget — checked against measured runs", () => {
     // 25 light rows are a tenth the bytes of 5 dense rows, yet cannot finish:
     // a rule keyed on payload size would get this exactly backwards.
     expect(2814).toBeLessThan(4851);
-    expect(fitsSyncBudget(5, 4851)).toBe(true);
-    expect(fitsSyncBudget(25, 2814)).toBe(false);
+    expect(withinEstimatedSyncBudget(5, 4851)).toBe(true);
+    expect(withinEstimatedSyncBudget(25, 2814)).toBe(false);
   });
 
   it("leaves headroom under what the 30s wall admits at measured throughput", () => {
@@ -52,7 +52,7 @@ describe("the safety limit and the capability limit are different controls", () 
   it("keeps the endpoint cap far above what one request can finish", () => {
     // If these ever converge, one of them has been mistaken for the other.
     const largestCompletableRowCount = Array.from({ length: 100 }, (_, i) => i + 1)
-      .filter((n) => fitsSyncBudget(n, 0))
+      .filter((n) => withinEstimatedSyncBudget(n, 0))
       .pop();
     expect(largestCompletableRowCount).toBeLessThan(MAX_REVIEWS_PER_REQUEST);
   });
@@ -61,6 +61,6 @@ describe("the safety limit and the capability limit are different controls", () 
     // 40 rows is under the 100-row cap and over budget. This gap is the bug the
     // capability model exists to close, so it must stay non-empty.
     expect(40).toBeLessThan(MAX_REVIEWS_PER_REQUEST);
-    expect(fitsSyncBudget(40, 40 * 120)).toBe(false);
+    expect(withinEstimatedSyncBudget(40, 40 * 120)).toBe(false);
   });
 });

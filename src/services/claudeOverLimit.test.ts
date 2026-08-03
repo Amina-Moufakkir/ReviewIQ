@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import type { AnalysisInput, Dataset, Product, Review } from "../types";
 import { analyzeWithClaude } from "./claudeEngine";
 import { AnalysisError } from "./analysisEngine";
-import { SYNC_OUTPUT_TOKEN_BUDGET, fitsSyncBudget } from "./claudeTags";
+import { SYNC_OUTPUT_TOKEN_BUDGET, withinEstimatedSyncBudget } from "./claudeTags";
 
 /**
  * A whole category can exceed what one synchronous request can finish where a
@@ -151,7 +151,7 @@ describe("Claude engine — within the synchronous budget", () => {
     // so this stays true if the budget is ever retuned.
     const rows = dataset.reviews.slice(0, 5);
     const bytes = rows.reduce((n, r) => n + new TextEncoder().encode(r.text).length, 0);
-    expect(fitsSyncBudget(rows.length, bytes)).toBe(true);
+    expect(withinEstimatedSyncBudget(rows.length, bytes)).toBe(true);
 
     await analyzeWithClaude(categoryInput, { ...dataset, reviews: rows });
     expect(fetchMock).toHaveBeenCalledTimes(1);

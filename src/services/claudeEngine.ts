@@ -3,7 +3,7 @@ import { AnalysisError, selectForScope } from "./analysisEngine";
 import {
   validateTags,
   estimateOutputTokens,
-  fitsSyncBudget,
+  withinEstimatedSyncBudget,
   SYNC_OUTPUT_TOKEN_BUDGET,
 } from "./claudeTags";
 import { tagsToResult, zeroResult } from "./tagsToResult";
@@ -47,7 +47,7 @@ export async function analyzeWithClaude(
   // The estimate is deliberately conservative and is a stopgap. Batching removes
   // this ceiling; see docs/adr/0001-category-scale-claude-analysis.md.
   const textBytes = matched.reduce((sum, r) => sum + byteLength(r.text), 0);
-  if (!fitsSyncBudget(matched.length, textBytes)) {
+  if (!withinEstimatedSyncBudget(matched.length, textBytes)) {
     throw new AnalysisError(
       overLimitMessage(product.name, matched.length, textBytes, unit, input),
     );
