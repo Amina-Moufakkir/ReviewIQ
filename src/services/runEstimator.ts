@@ -441,6 +441,28 @@ export function estimateRun(
  * leaves the analyst unable to tell whether they were close. It never truncates
  * silently — refusing and saying so is the whole point of the ceiling.
  */
+/**
+ * Why a selection is refused before it starts, when its labels cannot be
+ * reconciled.
+ *
+ * This is a DETERMINISTIC PREFLIGHT, not a confirmation prompt. The projection
+ * already says the label set will not reduce to a single request, and a run that
+ * cannot finish should not begin: every request it made would be billed and
+ * then discarded, since reporting on unreconciled labels is not an option —
+ * that would under-count every theme two requests happened to name differently.
+ *
+ * The copy names none of the machinery. An analyst does not choose how labels
+ * are grouped, so "hierarchy", "levels", and "canonicalization" are ours to
+ * worry about; what they can act on is the size and breadth of the selection.
+ */
+export function unsupportedGroupingMessage(remedies: readonly string[] = []): string {
+  const options = [...remedies, "analyze a smaller selection"].join(", ");
+  return (
+    `That selection covers too many different themes to group reliably into one ` +
+    `report. You can ${options}, or use the heuristic engine, which has no limit.`
+  );
+}
+
 export function ceilingRefusalMessage(
   estimate: RunEstimate,
   unitPlural = "rows",

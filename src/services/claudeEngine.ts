@@ -4,7 +4,7 @@ import type { IncomingReview } from "./claudeTags";
 import { tagsToResult, zeroResult } from "./tagsToResult";
 import { runClaudePipeline } from "./claudePipeline";
 import { createAnalyzeDispatch, createCanonicalizeDispatch } from "./claudeDispatch";
-import { ceilingRefusalMessage, estimateRun } from "./runEstimator";
+import { ceilingRefusalMessage, estimateRun, unsupportedGroupingMessage } from "./runEstimator";
 import { RUN_ENVIRONMENT } from "../config";
 import { unitFor, pluralize } from "../lib/datasetInfo";
 
@@ -68,6 +68,19 @@ export async function analyzeWithClaude(
     throw new AnalysisError(
       ceilingRefusalMessage(estimate, pluralize(matched.length, unit), remediesFor(input)),
     );
+  }
+
+  // Second preflight: the projection says these labels will not reduce to a
+  // single grouping request, so the run cannot complete.
+  //
+  // Refused HERE rather than surfaced as a confirmation, because there is
+  // nothing to weigh up. A run that ends in a terminal grouping failure has
+  // still paid for every tagging request it made along the way, and those
+  // results cannot be salvaged — reporting on unreconciled labels would
+  // under-count every theme two requests happened to name differently. Spending
+  // toward a known failure is not a trade-off an analyst should be offered.
+  if (estimate.canonicalization.unsupported) {
+    throw new AnalysisError(unsupportedGroupingMessage(remediesFor(input)));
   }
 
   const result = await runClaudePipeline(rows, {

@@ -51,3 +51,7 @@ public/amazon-products.csv
 # The committed record is bench/DECISION.md; raw runs would bury it in noise.
 # Runs against the local Amazon dataset also derive from ungitignored source data.
 bench/results/
+
+# Acceptance-gate artifacts: regenerable, bulky, and duplicate dataset text.
+# The durable record is bench/GATE.md.
+bench/gate/
