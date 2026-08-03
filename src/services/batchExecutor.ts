@@ -263,6 +263,12 @@ export async function executeBatches(
     // the batch and stamping it on every row would mark those fresh rows as
     // already retried before their first attempt had finished, and a later
     // transient failure would terminate the run instead of retrying them.
+    //
+    // Note for anyone tempted to simplify this back: no test currently fails if
+    // you do. Draws are kept unmixed (see `requeuedRows`), so a batch can never
+    // hold both an exhausted row and a fresh one, which makes the two stampings
+    // observationally equivalent today. This is defence in depth for the day the
+    // draw rules change — a green suite is not evidence that it is redundant.
     for (const row of batch.rows) attempts.set(row.id, (attempts.get(row.id) ?? 0) + 1);
     const attempt = Math.max(...batch.rows.map((r) => attempts.get(r.id) ?? 1));
 
