@@ -367,13 +367,37 @@ describe("provider response failures are controlled", () => {
     expect((captured.body as { error: { code: string } }).error.code).toBe("analysis_failed");
   });
 
-  it("fails when output was truncated", async () => {
+  it("reports truncation under its own code, so a retry can shrink the batch", async () => {
     mocks.stream.mockReturnValue(goodStream("max_tokens"));
     const { r, captured } = res();
     await handler(req(validBody()), r);
 
     expect(captured.status).toBe(502);
+    expect((captured.body as { error: { code: string } }).error.code).toBe("output_truncated");
     expect(loggedFields()[0]!.stopReason).toBe("max_tokens");
+  });
+
+  it.each([
+    ["a refusal", () => goodStream("refusal")],
+    ["unparseable output", () => rawStream("I'm afraid I can't do that.")],
+    [
+      "all tags rejected",
+      () =>
+        rawStream(
+          JSON.stringify([
+            { review_id: "ghost", theme: "C", sentiment: "praise", evidence_span: "comfortable to wear" },
+          ]),
+        ),
+    ],
+  ])("does NOT report %s as truncation", async (_label, stream) => {
+    mocks.stream.mockReturnValue(stream());
+    const { r, captured } = res();
+    await handler(req(validBody()), r);
+
+    // Only stop_reason max_tokens earns the shrink-and-retry signal. Anything
+    // else retried at a smaller size would waste a request on a failure that
+    // has nothing to do with size.
+    expect((captured.body as { error: { code: string } }).error.code).toBe("analysis_failed");
   });
 
   it("fails when the output is not parseable JSON", async () => {

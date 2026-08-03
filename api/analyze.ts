@@ -138,9 +138,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       });
     }
     if (stopReason === "max_tokens") {
+      // A distinct code, used for truncation and nothing else. The orchestrator
+      // needs to tell "the model was cut off mid-answer" from "the model
+      // refused" or "the output was unreadable": only the first is worth
+      // retrying, and only by shrinking the batch. Collapsing them into
+      // analysis_failed would make that retry a guess.
       return fail(
         502,
-        "analysis_failed",
+        "output_truncated",
         "There were too many reviews to analyze at once. Analyze a smaller selection.",
         { ...shape, stopReason },
       );
