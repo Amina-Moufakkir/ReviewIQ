@@ -3,9 +3,24 @@ import { analyze, AnalysisError } from "./analysisEngine";
 import { analyzeWithClaude } from "./claudeEngine";
 import { ANALYSIS_ENGINE } from "../config";
 import { unitFor } from "../lib/datasetInfo";
+import type { ProgressReporter } from "./analysisProgress";
 
 // Re-export so the UI keeps a single import surface for the analysis boundary.
 export { AnalysisError };
+
+export interface AnalyzeOptions {
+  signal?: AbortSignal;
+  /**
+   * Optional at every layer, and unused by the heuristic engine.
+   *
+   * That engine is pure, synchronous and in-browser: it has no stages to report
+   * and nothing to cancel. Emitting a token phase so the two paths "look the
+   * same" would be inventing a progress story the work does not have.
+   */
+  onProgress?: ProgressReporter;
+  /** The analyst has approved this run's estimated cost. Claude engine only. */
+  confirmed?: boolean;
+}
 
 /**
  * The single boundary between the UI and the analysis engine.
@@ -18,9 +33,13 @@ export { AnalysisError };
  *     function. A Claude failure throws AnalysisError (surfaced by the existing
  *     error path) — it never silently falls back to the heuristic engine.
  */
-export async function analyzeReviews(input: AnalysisInput, dataset: Dataset): Promise<AnalysisResult> {
+export async function analyzeReviews(
+  input: AnalysisInput,
+  dataset: Dataset,
+  options: AnalyzeOptions = {},
+): Promise<AnalysisResult> {
   if (ANALYSIS_ENGINE === "claude") {
-    return analyzeWithClaude(input, dataset);
+    return analyzeWithClaude(input, dataset, options);
   }
   await delay(700);
   // The dataset knows what one row is; the engine only needs the label.

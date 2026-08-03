@@ -7,6 +7,7 @@ import { runClaudePipeline } from "./claudePipeline";
 import type { Dispatch, DispatchRequest, DispatchResponse } from "./batchExecutor";
 import type { CanonicalizeDispatch } from "./canonicalize";
 import { CanonicalizeTransportError } from "./claudeDispatch";
+import { isProgressAdvance, phaseIndex, type AnalysisProgress } from "./analysisProgress";
 
 /**
  * The pipeline is where the two model stages meet, so what it is tested for is
@@ -426,5 +427,144 @@ describe("every failure becomes a controlled AnalysisError", () => {
 
     expect((error as Error).message).not.toContain("internal.example.com");
     expect((error as Error).message).not.toContain("key=abc");
+  });
+});
+
+// --- progress reporting ------------------------------------------------------
+
+describe("progress reporting", () => {
+  /** Collect every progress update a run emits. */
+  async function collect(
+    reviewRows: IncomingReview[],
+    analyze: Dispatch,
+    canonicalize: CanonicalizeDispatch,
+  ) {
+    const updates: AnalysisProgress[] = [];
+    const result = await runClaudePipeline(reviewRows, {
+      analyze,
+      canonicalize,
+      makeRunId: () => "run-1",
+      onProgress: (p) => updates.push(p),
+    });
+    return { updates, result };
+  }
+
+  it("reports the four phases in order", async () => {
+    const { updates } = await collect(
+      rows(MAX_ROWS_PER_BATCH_REQUEST * 2),
+      taggingDispatch((id) => `Theme ${id}`),
+      mergeAll,
+    );
+
+    const phases = [...new Set(updates.map((u) => u.phase))];
+    expect(phases).toEqual([
+      "preparing",
+      "analyzing-reviews",
+      "grouping-themes",
+      "building-report",
+    ]);
+  });
+
+  it("never moves backward across a whole run", async () => {
+    const { updates } = await collect(
+      rows(MAX_ROWS_PER_BATCH_REQUEST * 3),
+      taggingDispatch((id) => `Theme ${id}`),
+      mergeAll,
+    );
+
+    let previous: AnalysisProgress | null = null;
+    for (const update of updates) {
+      expect(isProgressAdvance(previous, update), `${update.phase}@${update.rowsCompleted}`).toBe(
+        true,
+      );
+      previous = update;
+    }
+    expect(updates.length).toBeGreaterThan(4);
+  });
+
+  it("reports the selection size as the total from the very first update", async () => {
+    const rowCount = MAX_ROWS_PER_BATCH_REQUEST + 5;
+    const { updates } = await collect(
+      rows(rowCount),
+      taggingDispatch((id) => `Theme ${id}`),
+      mergeAll,
+    );
+
+    // Fixed at the start, so a percentage built on it cannot slide.
+    for (const update of updates) expect(update.rowsTotal).toBe(rowCount);
+    expect(updates[0]!.phase).toBe("preparing");
+    expect(updates[0]!.rowsCompleted).toBe(0);
+  });
+
+  it("holds rows at the total once tagging is done", async () => {
+    const rowCount = MAX_ROWS_PER_BATCH_REQUEST * 2;
+    const { updates } = await collect(
+      rows(rowCount),
+      taggingDispatch((id) => `Theme ${id}`),
+      mergeAll,
+    );
+
+    // Grouping and report-building are not per-row work, so the count must not
+    // reset to zero and imply the run started over.
+    for (const update of updates) {
+      if (phaseIndex(update.phase) >= phaseIndex("grouping-themes")) {
+        expect(update.rowsCompleted).toBe(rowCount);
+      }
+    }
+  });
+
+  it("reaches building-report only after grouping has finished", async () => {
+    const order: string[] = [];
+    const canonicalize: CanonicalizeDispatch = async (labels) => {
+      order.push("grouping");
+      return { groups: [labels.map((_, i) => i)] };
+    };
+    const updates: AnalysisProgress[] = [];
+    await runClaudePipeline(rows(6), {
+      analyze: taggingDispatch((id) => `Theme ${id}`),
+      canonicalize,
+      makeRunId: () => "run-1",
+      onProgress: (p) => {
+        if (p.phase === "building-report") order.push("building");
+      },
+    });
+    void updates;
+    expect(order).toEqual(["grouping", "building"]);
+  });
+
+  it("emits nothing once a stage fails", async () => {
+    const updates: AnalysisProgress[] = [];
+    await runClaudePipeline(rows(4), {
+      analyze: taggingDispatch((id) => `Theme ${id}`),
+      canonicalize: async () => {
+        throw new CanonicalizeTransportError("provider_unavailable");
+      },
+      makeRunId: () => "run-1",
+      onProgress: (p) => updates.push(p),
+    }).catch(() => {});
+
+    // Grouping was reached and failed, so the run never claims to be building a
+    // report it will not produce.
+    expect(updates.some((u) => u.phase === "grouping-themes")).toBe(true);
+    expect(updates.some((u) => u.phase === "building-report")).toBe(false);
+  });
+
+  it("runs identically when no reporter is supplied", async () => {
+    const withReporter = await collect(
+      rows(8),
+      taggingDispatch((id) => `Theme ${id}`),
+      mergeAll,
+    );
+    const without = await runClaudePipeline(rows(8), {
+      analyze: taggingDispatch((id) => `Theme ${id}`),
+      canonicalize: mergeAll,
+      makeRunId: () => "run-1",
+    });
+    expect(without.tags).toEqual(withReporter.result.tags);
+  });
+
+  it("reports no progress at all for an empty selection", async () => {
+    const { updates } = await collect([], taggingDispatch(() => "T"), mergeAll);
+    expect(updates).toEqual([]);
   });
 });

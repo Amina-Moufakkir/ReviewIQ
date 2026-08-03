@@ -15,6 +15,7 @@ import {
 } from "./canonicalize";
 import { composeCanonicalTags, distinctThemeLabels, type CanonicalTag } from "./canonicalTag";
 import { CanonicalizeTransportError } from "./claudeDispatch";
+import type { AnalysisPhase, ProgressReporter } from "./analysisProgress";
 
 /**
  * The two model-driven stages, run in order, producing tags fit for aggregation.
@@ -51,6 +52,15 @@ export interface PipelineOptions {
   signal?: AbortSignal;
   executorConfig?: ExecutorConfig;
   makeRunId?: () => string;
+  /**
+   * Reports which stage is running and how many rows are done.
+   *
+   * The pipeline owns the phase transitions because it owns the stage order;
+   * the executor owns the row count because it is what completes rows. Nothing
+   * downstream recomputes either — a UI that derived its own phase from timing
+   * would eventually disagree with what is actually happening.
+   */
+  onProgress?: ProgressReporter;
 }
 
 const EMPTY_TELEMETRY: RunTelemetry = {
@@ -68,6 +78,13 @@ export async function runClaudePipeline(
   rows: readonly IncomingReview[],
   options: PipelineOptions,
 ): Promise<PipelineResult> {
+  // Row counts only ever rise, so once a stage is past tagging they stay at the
+  // total rather than resetting — progress that moved backward between stages
+  // would be as wrong as progress that moved backward within one.
+  let rowsCompleted = 0;
+  let batchesCompleted = 0;
+  const emit = (phase: AnalysisPhase) =>
+    options.onProgress?.({ phase, rowsCompleted, rowsTotal: rows.length, batchesCompleted });
   // The legitimate empty state, and it must cost nothing: an empty window is an
   // answer, not a request. Neither endpoint is contacted.
   if (rows.length === 0) {
@@ -82,6 +99,8 @@ export async function runClaudePipeline(
     };
   }
 
+  emit("preparing");
+
   // --- stage 1: tag every row, in bounded batches ---------------------------
   //
   // All-or-nothing. `executeBatches` resolves only when every row was covered by
@@ -94,12 +113,23 @@ export async function runClaudePipeline(
       signal: options.signal,
       config: options.executorConfig ?? DEFAULT_EXECUTOR_CONFIG,
       makeRunId: options.makeRunId,
+      onProgress: (run) => {
+        rowsCompleted = run.rowsCompleted;
+        batchesCompleted = run.batchesCompleted;
+        emit("analyzing-reviews");
+      },
     });
   } catch (err) {
     throw analysisErrorFor(err);
   }
 
   // --- stage 2: reconcile labels across batches -----------------------------
+  //
+  // Every row is tagged by now, so the row count is complete whatever the last
+  // executor callback happened to report.
+  rowsCompleted = rows.length;
+  emit("grouping-themes");
+
   const labels = distinctThemeLabels(execution.tags);
 
   // Nothing to reconcile: zero or one distinct label cannot be grouped with
@@ -130,6 +160,8 @@ export async function runClaudePipeline(
       throw analysisErrorFor(err);
     }
   }
+
+  emit("building-report");
 
   // --- stage 3: compose, deterministically ----------------------------------
   //
